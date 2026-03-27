@@ -174,8 +174,8 @@ def _extract_mode(kwargs: dict[str, Any]) -> CacheMode:
     if cache_control is not None:
         return cache_control.to_mode()
 
-    skip_cache = kwargs.pop("component_cache__skip_cache", False)
-    refresh_cache = kwargs.pop("component_cache__refresh_cache", False)
+    skip_cache = kwargs.pop("hypercache__skip_cache", False)
+    refresh_cache = kwargs.pop("hypercache__refresh_cache", False)
     if skip_cache:
         return CacheMode.BYPASS
     if refresh_cache:
