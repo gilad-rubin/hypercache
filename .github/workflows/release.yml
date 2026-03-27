@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.1.1)"
+        required: true
+        type: string
+      publish_to_pypi:
+        description: "Publish to PyPI"
+        required: true
+        default: true
+        type: boolean
+      create_draft:
+        description: "Create as draft release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  validate-inputs:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate version format
+        id: validate
+        run: |
+          VERSION="${{ inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?(\+[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?$ ]]; then
+            echo "Invalid semantic version: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: validate-inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup UV
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project dependencies
+        run: uv sync --extra dev
+
+      - name: Update version and create commit
+        env:
+          VERSION: ${{ needs.validate-inputs.outputs.version }}
+        run: |
+          sed -i -E "0,/^version = \".*\"/s//version = \"$VERSION\"/" pyproject.toml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml
+          git commit -m "chore: bump version to v$VERSION" || true
+          CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          git push origin "$CURRENT_BRANCH"
+
+      - name: Create and push tag
+        env:
+          VERSION: ${{ needs.validate-inputs.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+          git tag -d "$TAG" 2>/dev/null || true
+          git push origin ":refs/tags/$TAG" 2>/dev/null || true
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Build package
+        run: |
+          rm -rf dist/ build/ *.egg-info/
+          uv build
+          test -f dist/*.whl
+          test -f dist/*.tar.gz
+
+      - name: Verify package
+        run: |
+          uv run twine check dist/*
+
+      - name: Publish to PyPI
+        if: ${{ inputs.publish_to_pypi }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          uv run twine upload dist/* --skip-existing
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.validate-inputs.outputs.version }}
+          name: "nanocache v${{ needs.validate-inputs.outputs.version }}"
+          draft: ${{ inputs.create_draft }}
+          body: |
+            Release v${{ needs.validate-inputs.outputs.version }}
+
+            Install with:
+
+            ```bash
+            pip install nanocache
+            ```

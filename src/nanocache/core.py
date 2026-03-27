@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from .decorators import cached, build_inputs
+from .decorators import build_inputs, cached
 from .keys import build_key
 from .service import CacheService
-from .types import CacheEntry, CacheKey, CacheMode, CachePolicy, CacheResult
+from .types import CacheKey, CacheMode, CachePolicy, CacheResult
 
 
 @dataclass(frozen=True)

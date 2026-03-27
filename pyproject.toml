@@ -2,13 +2,46 @@
 name = "nanocache"
 version = "0.1.0"
 description = "Method-level exact-match caching for expensive Python components"
+authors = [{ name = "Gilad Rubin", email = "gilad.rubin@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+keywords = ["cache", "caching", "memoization", "python", "utilities"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = ["diskcache>=5.6.3"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.5.0", "twine>=6.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/gilad-rubin/nanocache"
+Repository = "https://github.com/gilad-rubin/nanocache"
+Issues = "https://github.com/gilad-rubin/nanocache/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/nanocache", "src/component_cache"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/README.md", "/CHANGELOG.md"]

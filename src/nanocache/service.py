@@ -90,7 +90,11 @@ class CacheService:
         predicate: Callable[[str, CacheEntry], bool] | None = None,
         method_name: str | None = None,
     ) -> int:
-        component_obj = component if (component is not None and not isinstance(component, str)) else None
+        component_obj = (
+            component
+            if component is not None and not isinstance(component, str)
+            else None
+        )
         component_value = component_name(component_obj) if component_obj is not None else component
         target_config = component_config(component_obj) if component_obj is not None else None
         target_operation = operation or method_name
@@ -130,7 +134,12 @@ class CacheService:
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
-        request = build_key(component=component, operation=operation, version=version, inputs=inputs)
+        request = build_key(
+            component=component,
+            operation=operation,
+            version=version,
+            inputs=inputs,
+        )
         cached = self._read_cached_value(
             key=request.key,
             payload=request.payload,
@@ -180,7 +189,12 @@ class CacheService:
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
-        request = build_key(component=component, operation=operation, version=version, inputs=inputs)
+        request = build_key(
+            component=component,
+            operation=operation,
+            version=version,
+            inputs=inputs,
+        )
         cached = self._read_cached_value(
             key=request.key,
             payload=request.payload,
