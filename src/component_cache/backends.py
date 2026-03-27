@@ -1,7 +1,1 @@
-from .stores import CacheStore, DiskCacheStore, MemoryStore
-from .types import CacheEntry
-
-CacheBackend = CacheStore
-CacheRecord = CacheEntry
-InMemoryBackend = MemoryStore
-DiskCacheBackend = DiskCacheStore
+from nanocache.backends import *  # noqa: F401,F403
