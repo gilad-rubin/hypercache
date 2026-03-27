@@ -1,1 +1,1 @@
-from nanocache import *  # noqa: F401,F403
+from hypercache import *  # noqa: F401,F403

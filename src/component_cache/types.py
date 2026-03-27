@@ -1,1 +1,1 @@
-from nanocache.types import *  # noqa: F401,F403
+from hypercache.types import *  # noqa: F401,F403

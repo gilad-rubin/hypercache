@@ -1,5 +1,5 @@
 [project]
-name = "nanocache"
+name = "hypercache"
 version = "0.1.0"
 description = "Method-level exact-match caching for expensive Python components"
 authors = [{ name = "Gilad Rubin", email = "gilad.rubin@gmail.com" }]
@@ -41,7 +41,7 @@ target-version = "py312"
 select = ["E", "F", "I"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/nanocache", "src/component_cache"]
+packages = ["src/hypercache", "src/nanocache", "src/component_cache"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/src", "/README.md", "/CHANGELOG.md"]

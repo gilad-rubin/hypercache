@@ -1,1 +1,1 @@
-from nanocache.decorators import *  # noqa: F401,F403
+from hypercache.decorators import *  # noqa: F401,F403

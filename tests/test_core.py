@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from nanocache import (
+from hypercache import (
     CacheMode,
     CachePolicy,
     CacheService,
@@ -370,6 +370,12 @@ def test_component_cache_import_path_still_works():
     import component_cache
 
     assert component_cache.cached is cached
+
+
+def test_nanocache_import_path_still_works():
+    import nanocache
+
+    assert nanocache.cached is cached
 
 
 def _counting_result(component) -> dict[str, int]:

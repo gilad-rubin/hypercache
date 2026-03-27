@@ -1,1 +1,1 @@
-from nanocache.keys import *  # noqa: F401,F403
+from hypercache.keys import *  # noqa: F401,F403
