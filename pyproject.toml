@@ -1,5 +1,5 @@
 [project]
-name = "component-cache"
+name = "nanocache"
 version = "0.1.0"
 description = "Method-level exact-match caching for expensive Python components"
 readme = "README.md"
@@ -11,4 +11,4 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/component_cache"]
+packages = ["src/nanocache", "src/component_cache"]

@@ -1,4 +1,4 @@
-# component-cache
+# nanocache
 
 Small, explicit method-level caching for expensive Python components.
 
@@ -23,7 +23,7 @@ The package tries to keep responsibilities separate:
 ## Installation
 
 ```bash
-pip install component-cache
+pip install nanocache
 ```
 
 `DiskCacheStore` uses the open-source [`diskcache`](https://github.com/grantjenks/python-diskcache) library.
@@ -33,7 +33,7 @@ pip install component-cache
 ```python
 from datetime import timedelta
 
-from component_cache import CachePolicy, CacheService, MemoryStore, cached
+from nanocache import CachePolicy, CacheService, MemoryStore, cached
 
 
 class Embedder:
@@ -63,7 +63,7 @@ Repeated calls with the same component identity, method name, version, and norma
 You can also use the service directly without decorators:
 
 ```python
-from component_cache import CacheMode, CachePolicy, CacheService, MemoryStore
+from nanocache import CacheMode, CachePolicy, CacheService, MemoryStore
 
 cache = CacheService(MemoryStore())
 policy = CachePolicy(ttl=None, stale=None)
@@ -91,7 +91,7 @@ Embedder.embed.clear(embedder)
 
 ## Compatibility
 
-The package still exports the original convenience surface:
+The package still exports the original convenience surface, and keeps `component_cache` as a compatibility import path:
 
 - `ComponentCache`
 - `cached_method`

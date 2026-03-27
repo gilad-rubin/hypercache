@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from component_cache import (
+from nanocache import (
     CacheMode,
     CachePolicy,
     CacheService,
@@ -364,6 +364,12 @@ def test_async_cached_refreshes_in_background():
         assert fresh.value["calls"] == 2
 
     asyncio.run(scenario())
+
+
+def test_component_cache_import_path_still_works():
+    import component_cache
+
+    assert component_cache.cached is cached
 
 
 def _counting_result(component) -> dict[str, int]:
