@@ -41,7 +41,7 @@ target-version = "py312"
 select = ["E", "F", "I"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/hypercache", "src/nanocache", "src/component_cache"]
+packages = ["src/hypercache"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/src", "/README.md", "/CHANGELOG.md"]

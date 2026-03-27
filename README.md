@@ -91,7 +91,7 @@ Embedder.embed.clear(embedder)
 
 ## Compatibility
 
-The package still exports the original convenience surface, and keeps both `nanocache` and `component_cache` as compatibility import paths:
+The package exports the convenience surface directly from `hypercache`:
 
 - `ComponentCache`
 - `cached_method`

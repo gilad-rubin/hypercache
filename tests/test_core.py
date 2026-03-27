@@ -366,18 +366,6 @@ def test_async_cached_refreshes_in_background():
     asyncio.run(scenario())
 
 
-def test_component_cache_import_path_still_works():
-    import component_cache
-
-    assert component_cache.cached is cached
-
-
-def test_nanocache_import_path_still_works():
-    import nanocache
-
-    assert nanocache.cached is cached
-
-
 def _counting_result(component) -> dict[str, int]:
     component.calls += 1
     return {"count": component.calls}

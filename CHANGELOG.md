@@ -4,4 +4,4 @@
 
 - Introduced the compact `hypercache` architecture built around `CacheService`, `CachePolicy`, and `@cached`.
 - Added in-memory and disk-backed stores.
-- Kept `component_cache` import shims for compatibility.
+- Standardized on the `hypercache` package name.
