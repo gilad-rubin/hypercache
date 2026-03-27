@@ -1,48 +1,47 @@
 # hypercache
 
-Small, explicit method-level caching for expensive Python components.
+Explicit, persistent caching for expensive Python functions and methods.
 
-The library is organized around a few simple concepts:
+## What it does
 
-- `CacheService`: orchestrates read/compute/write behavior
-- `CachePolicy`: declares TTL, stale window, and `None` handling
-- `CacheMode`: per-call override for normal, bypass, or refresh behavior
-- `MemoryStore` / `DiskCacheStore`: persistence only
-- `@cached(...)`: a thin decorator for component methods
+- Caches expensive calls (API calls, embeddings, LLM generations)
+- Works with sync and async methods
+- Persists across restarts (disk, extensible to Redis)
+- Normalizes non-hashable inputs (dicts, Pydantic models, dataclasses, bytes)
+- Supports TTL, stale windows, and background refresh
 
-## Why this design
+## Why not `functools.lru_cache` or `cachetools`
 
-The package tries to keep responsibilities separate:
+| | lru_cache | cachetools | hypercache |
+|---|---|---|---|
+| Async support | No | No | Yes |
+| Persistent storage | No | No | Yes |
+| Non-hashable inputs | No | No | Yes (normalize) |
+| Instance state in key | N/A | Manual | `config=` |
+| TTL / stale / refresh | No | TTL only | Yes |
 
-- key building is deterministic and isolated
-- cache policy is explicit and validated
-- stores do not decide behavior
-- sync and async flows share the same decision path
-- decorated methods expose clear helper methods for invalidation
-
-## Installation
+## Install
 
 ```bash
 pip install hypercache
 ```
 
-`DiskCacheStore` uses the open-source [`diskcache`](https://github.com/grantjenks/python-diskcache) library.
-
 ## Basic usage
 
 ```python
 from datetime import timedelta
-
 from hypercache import CachePolicy, CacheService, MemoryStore, cached
 
 
-class Embedder:
-    def __init__(self) -> None:
-        self._cache = CacheService(MemoryStore(max_entries=512))
-        self.model = "text-embedding-3-large"
+def _embedder_config(self) -> dict:
+    return {"model": self.model, "dimensions": self.dimensions}
 
-    def cache_identity(self) -> dict[str, str]:
-        return {"model": self.model}
+
+class Embedder:
+    def __init__(self, model: str = "text-embedding-3-large", dimensions: int = 1536):
+        self._cache = CacheService(MemoryStore(max_entries=512))
+        self.model = model
+        self.dimensions = dimensions
 
     @cached(
         version="embed:v1",
@@ -51,53 +50,91 @@ class Embedder:
             stale=timedelta(minutes=30),
             refresh_in_background=True,
         ),
+        config=_embedder_config,
     )
-    def embed(self, text: str) -> dict:
-        return {"vector": [1, 2, 3], "text": text}
+    async def embed(self, text: str) -> dict:
+        return await call_embedding_api(text)
 ```
 
-Repeated calls with the same component identity, method name, version, and normalized inputs will hit the cache.
+- **Inputs** are auto-captured from the function signature. No duplicate parameter lists.
+- **`config=`** explicitly declares which instance state affects the cache key. No hidden method lookups.
+- **`version=`** lets you invalidate all cached values when the implementation changes.
 
-## Explicit calls
+## Sharing config across methods
 
-You can also use the service directly without decorators:
+Define the config function once, reference it from multiple decorators:
 
 ```python
-from hypercache import CacheMode, CachePolicy, CacheService, MemoryStore
+def _llm_config(self) -> dict:
+    return {"model": self.model, "temperature": self.temperature}
 
-cache = CacheService(MemoryStore())
-policy = CachePolicy(ttl=None, stale=None)
 
+class LLM:
+    def __init__(self, model: str, temperature: float):
+        self._cache = CacheService(MemoryStore())
+        self.model = model
+        self.temperature = temperature
+
+    @cached(version="generate:v1", policy=CachePolicy(), config=_llm_config)
+    async def generate(self, prompt: str) -> dict:
+        ...
+
+    @cached(version="structured:v1", policy=CachePolicy(), config=_llm_config)
+    async def generate_structured(self, prompt: str, schema: dict) -> dict:
+        ...
+```
+
+## Excluding inputs from the key
+
+Use `exclude=` to drop arguments that shouldn't affect caching:
+
+```python
+@cached(
+    version="embed:v1",
+    policy=CachePolicy(),
+    config=_embedder_config,
+    exclude=frozenset({"request_id", "trace_id"}),
+)
+async def embed(self, text: str, request_id: str | None = None, trace_id: str | None = None):
+    ...
+```
+
+## Persistent cache
+
+Swap the store — everything else stays the same:
+
+```python
+from pathlib import Path
+from hypercache import DiskCacheStore
+
+cache = CacheService(DiskCacheStore(Path("./cache")))
+```
+
+## Direct usage (no decorator)
+
+```python
 result = cache.run(
-    component=embedder,
+    instance=embedder,
     operation="embed",
     version="embed:v1",
     inputs={"text": "hello"},
-    policy=policy,
-    mode=CacheMode.NORMAL,
+    config={"model": embedder.model},
+    policy=CachePolicy(),
     compute=lambda: embedder.embed_uncached("hello"),
 )
 ```
 
-## Invalidation helpers
-
-Decorated methods expose helpers on the descriptor:
+## Invalidation
 
 ```python
-key = Embedder.embed.key_for(embedder, "hello")
-Embedder.embed.invalidate(embedder, "hello")
-Embedder.embed.clear(embedder)
+Embedder.embed.key_for(embedder, "hello")     # inspect key
+Embedder.embed.invalidate(embedder, "hello")   # delete one entry
+Embedder.embed.clear(embedder)                 # delete all entries for this method
 ```
 
-## Compatibility
+## Design principles
 
-The package exports the convenience surface directly from `hypercache`:
-
-- `ComponentCache`
-- `cached_method`
-- `cached_call`
-- `acached_call`
-- `build_cache_request`
-- `build_cache_request_for`
-
-Those names are thin wrappers over the new architecture.
+- **No magic**: no hidden method lookups, no Protocols that silently match by name
+- **Explicit**: `config=` in the decorator, not a convention on the class
+- **DRY**: inputs auto-captured from signature, no duplicate parameter lists
+- **IDE-friendly**: named functions, not lambdas; errors surface at import time

@@ -24,6 +24,12 @@ def build_inputs(
     return {name: value for name, value in bound.arguments.items() if name != "self"}
 
 
+def _resolve_config(config_fn: Callable[..., dict[str, Any]] | None, instance: Any) -> dict[str, Any] | None:
+    if config_fn is None:
+        return None
+    return config_fn(instance)
+
+
 class CachedMethod:
     def __init__(
         self,
@@ -33,7 +39,9 @@ class CachedMethod:
         policy: CachePolicy,
         operation: str,
         cache_attr: str = "_cache",
-        inputs_builder: Callable[..., dict[str, Any]] | None = None,
+        config: Callable[..., dict[str, Any]] | None = None,
+        inputs: Callable[..., dict[str, Any]] | None = None,
+        exclude: frozenset[str] | None = None,
         serialize: Callable[[Any], Any] | None = None,
         deserialize: Callable[[Any], Any] | None = None,
     ) -> None:
@@ -42,11 +50,19 @@ class CachedMethod:
         self.policy = policy
         self.operation = operation
         self.cache_attr = cache_attr
-        self.inputs_builder = inputs_builder
+        self.config = config
+        self.inputs_fn = inputs
+        self.exclude = exclude
         self.serialize = serialize
         self.deserialize = deserialize
         self.is_async = iscoroutinefunction(func)
         wraps(func)(self)
+
+    def _build_inputs(self, instance: Any, args: tuple, kwargs: dict) -> dict[str, Any]:
+        raw = build_inputs(self.func, instance, args, kwargs, self.inputs_fn)
+        if self.exclude:
+            return {k: v for k, v in raw.items() if k not in self.exclude}
+        return raw
 
     def __get__(self, instance: Any, owner: type | None = None) -> Any:
         if instance is None:
@@ -63,12 +79,14 @@ class CachedMethod:
             @wraps(self.func)
             async def bound(*args: Any, **kwargs: Any):
                 mode = _extract_mode(kwargs)
-                inputs = build_inputs(self.func, instance, args, kwargs, self.inputs_builder)
+                inputs = self._build_inputs(instance, args, kwargs)
+                config = _resolve_config(self.config, instance)
                 return await cache.arun(
-                    component=instance,
+                    instance=instance,
                     operation=self.operation,
                     version=self.version,
                     inputs=inputs,
+                    config=config,
                     policy=self.policy,
                     mode=mode,
                     compute=lambda: self.func(instance, *args, **kwargs),
@@ -81,12 +99,14 @@ class CachedMethod:
             @wraps(self.func)
             def bound(*args: Any, **kwargs: Any):
                 mode = _extract_mode(kwargs)
-                inputs = build_inputs(self.func, instance, args, kwargs, self.inputs_builder)
+                inputs = self._build_inputs(instance, args, kwargs)
+                config = _resolve_config(self.config, instance)
                 return cache.run(
-                    component=instance,
+                    instance=instance,
                     operation=self.operation,
                     version=self.version,
                     inputs=inputs,
+                    config=config,
                     policy=self.policy,
                     mode=mode,
                     compute=lambda: self.func(instance, *args, **kwargs),
@@ -99,12 +119,14 @@ class CachedMethod:
         return bound
 
     def key_for(self, instance: Any, *args: Any, **kwargs: Any) -> str:
-        inputs = build_inputs(self.func, instance, args, kwargs, self.inputs_builder)
+        inputs = self._build_inputs(instance, args, kwargs)
+        config = _resolve_config(self.config, instance)
         return build_key(
-            component=instance,
+            instance=instance,
             operation=self.operation,
             version=self.version,
             inputs=inputs,
+            config=config,
         ).key
 
     def invalidate(self, instance: Any, *args: Any, **kwargs: Any) -> None:
@@ -117,18 +139,20 @@ class CachedMethod:
         if not isinstance(cache, CacheService):
             return 0
         return cache.delete_matching(
-            component=instance,
+            instance=instance,
             operation=self.operation,
             version=self.version,
         )
 
     def cache_request_for(self, instance: Any, *args: Any, **kwargs: Any):
-        inputs = build_inputs(self.func, instance, args, kwargs, self.inputs_builder)
+        inputs = self._build_inputs(instance, args, kwargs)
+        config = _resolve_config(self.config, instance)
         return build_key(
-            component=instance,
+            instance=instance,
             operation=self.operation,
             version=self.version,
             inputs=inputs,
+            config=config,
         )
 
     def invalidate_cache(self, instance: Any, *args: Any, **kwargs: Any) -> None:
@@ -144,7 +168,9 @@ def cached(
     policy: CachePolicy,
     operation: str | None = None,
     cache_attr: str = "_cache",
-    inputs_builder: Callable[..., dict[str, Any]] | None = None,
+    config: Callable[..., dict[str, Any]] | None = None,
+    inputs: Callable[..., dict[str, Any]] | None = None,
+    exclude: frozenset[str] | None = None,
     serialize: Callable[[Any], Any] | None = None,
     deserialize: Callable[[Any], Any] | None = None,
 ) -> Callable[[Callable[..., Any]], CachedMethod]:
@@ -155,7 +181,9 @@ def cached(
             policy=policy,
             operation=operation or func.__name__,
             cache_attr=cache_attr,
-            inputs_builder=inputs_builder,
+            config=config,
+            inputs=inputs,
+            exclude=exclude,
             serialize=serialize,
             deserialize=deserialize,
         )

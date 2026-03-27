@@ -9,14 +9,11 @@ import pytest
 from hypercache import (
     CacheMode,
     CachePolicy,
+    CacheResult,
     CacheService,
     DiskCacheStore,
     MemoryStore,
-    build_cache_request,
-    build_cache_request_for,
     cached,
-    cached_call,
-    cached_method,
 )
 
 
@@ -41,41 +38,44 @@ def test_diskcache_store_round_trip(tmp_path):
     assert cache.get(key) == {"text": "world"}
 
 
-def test_run_uses_component_config_and_operation():
-    class FakeComponent:
+def test_run_uses_config_and_operation():
+    def _config(self):
+        return {"model": self.model}
+
+    class FakeService:
         def __init__(self, cache: CacheService, model: str) -> None:
             self._cache = cache
             self.model = model
 
-        def cache_identity(self):
-            return {"model": self.model}
-
     cache = CacheService(MemoryStore())
     policy = CachePolicy()
-    first = FakeComponent(cache, "a")
-    second = FakeComponent(cache, "b")
+    first = FakeService(cache, "a")
+    second = FakeService(cache, "b")
 
     first_result = cache.run(
-        component=first,
+        instance=first,
         operation="embed",
         version="embed:v1",
         inputs={"text": "shalom"},
+        config=_config(first),
         policy=policy,
         compute=lambda: {"vector": [1]},
     )
     hit = cache.run(
-        component=first,
+        instance=first,
         operation="embed",
         version="embed:v1",
         inputs={"text": "shalom"},
+        config=_config(first),
         policy=policy,
         compute=lambda: {"vector": [2]},
     )
     miss = cache.run(
-        component=second,
+        instance=second,
         operation="embed",
         version="embed:v1",
         inputs={"text": "shalom"},
+        config=_config(second),
         policy=policy,
         compute=lambda: {"vector": [3]},
     )
@@ -88,16 +88,15 @@ def test_run_uses_component_config_and_operation():
 
 
 def test_run_supports_bypass_and_refresh_modes():
-    class FakeComponent:
-        def cache_identity(self):
-            return {"model": "test"}
+    class FakeService:
+        pass
 
     cache = CacheService(MemoryStore())
-    component = FakeComponent()
+    instance = FakeService()
     policy = CachePolicy()
 
     cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
@@ -106,7 +105,7 @@ def test_run_supports_bypass_and_refresh_modes():
     )
 
     bypassed = cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
@@ -115,7 +114,7 @@ def test_run_supports_bypass_and_refresh_modes():
         compute=lambda: {"vector": [2]},
     )
     refreshed = cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
@@ -124,7 +123,7 @@ def test_run_supports_bypass_and_refresh_modes():
         compute=lambda: {"vector": [3]},
     )
     hit = cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
@@ -145,16 +144,15 @@ def test_policy_validates_stale_window():
 
 
 def test_none_can_be_cached_when_enabled():
-    class FakeComponent:
-        def cache_identity(self):
-            return {"model": "test"}
+    class FakeService:
+        pass
 
     cache = CacheService(MemoryStore())
-    component = FakeComponent()
+    instance = FakeService()
     policy = CachePolicy(cache_none=True)
 
     first = cache.run(
-        component=component,
+        instance=instance,
         operation="lookup",
         version="lookup:v1",
         inputs={"query": "missing"},
@@ -162,7 +160,7 @@ def test_none_can_be_cached_when_enabled():
         compute=lambda: None,
     )
     second = cache.run(
-        component=component,
+        instance=instance,
         operation="lookup",
         version="lookup:v1",
         inputs={"query": "missing"},
@@ -185,38 +183,35 @@ def test_expired_entries_can_be_cleaned_up():
 
 
 def test_stale_value_refreshes_in_background():
-    class FakeComponent:
+    class FakeService:
         def __init__(self, cache: CacheService):
             self._cache = cache
             self.calls = 0
 
-        def cache_identity(self):
-            return {"model": "test"}
-
     cache = CacheService(MemoryStore())
-    component = FakeComponent(cache)
+    instance = FakeService(cache)
     policy = CachePolicy(stale=timedelta(milliseconds=1), refresh_in_background=True)
 
     first = cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
         policy=policy,
-        compute=lambda: _counting_result(component),
+        compute=lambda: _counting_result(instance),
     )
     time.sleep(0.02)
     stale = cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
         policy=policy,
-        compute=lambda: _slow_counting_result(component),
+        compute=lambda: _slow_counting_result(instance),
     )
     time.sleep(0.08)
     fresh = cache.run(
-        component=component,
+        instance=instance,
         operation="embed",
         version="embed:v1",
         inputs={"text": "hello"},
@@ -232,27 +227,28 @@ def test_stale_value_refreshes_in_background():
     assert fresh.value == {"count": 2}
 
 
-def test_cached_descriptor_normalizes_calls_and_supports_invalidation():
-    class FakeComponent:
+def test_cached_decorator_with_explicit_config():
+    def _config(self):
+        return {"model": self.model}
+
+    class FakeService:
         def __init__(self, cache: CacheService):
             self._cache = cache
+            self.model = "mock"
             self.calls = 0
 
-        def cache_identity(self):
-            return {"model": "mock"}
-
-        @cached(version="answer:v1", policy=CachePolicy())
+        @cached(version="answer:v1", policy=CachePolicy(), config=_config)
         def answer(self, prompt: str, system_prompt: str = ""):
             self.calls += 1
             return {"prompt": prompt, "system_prompt": system_prompt, "calls": self.calls}
 
-    component = FakeComponent(CacheService(MemoryStore()))
-    first = component.answer("hello")
-    second = component.answer(prompt="hello")
-    FakeComponent.answer.invalidate(component, "hello")
-    third = component.answer("hello")
-    cleared = FakeComponent.answer.clear(component)
-    fourth = component.answer("hello")
+    instance = FakeService(CacheService(MemoryStore()))
+    first = instance.answer("hello")
+    second = instance.answer(prompt="hello")
+    FakeService.answer.invalidate(instance, "hello")
+    third = instance.answer("hello")
+    cleared = FakeService.answer.clear(instance)
+    fourth = instance.answer("hello")
 
     assert first.cached is False
     assert second.cached is True
@@ -264,83 +260,97 @@ def test_cached_descriptor_normalizes_calls_and_supports_invalidation():
     assert fourth.value["calls"] == 3
 
 
-def test_build_cache_request_for_matches_decorated_method():
-    class FakeComponent:
-        def __init__(self, cache: CacheService):
-            self._cache = cache
-
-        def cache_identity(self):
-            return {"provider": "test"}
-
-        @cached(version="lookup:v1", policy=CachePolicy())
-        def lookup(self, query: str, limit: int = 5):
-            return {"query": query, "limit": limit}
-
-    component = FakeComponent(CacheService(MemoryStore()))
-    first = build_cache_request_for(component.lookup, "democracy")
-    second = build_cache_request_for(component.lookup, query="democracy")
-    assert first.key == second.key
-
-
-def test_build_cache_request_uses_operation_name():
-    class FakeComponent:
-        def cache_identity(self):
-            return {"model": "gemini"}
-
-    component = FakeComponent()
-    first = build_cache_request(
-        component,
-        method_name="generate",
-        version="generate:v1",
-        inputs={"prompt": "hello"},
-    )
-    second = build_cache_request(
-        component,
-        method_name="generate_structured",
-        version="generate:v1",
-        inputs={"prompt": "hello"},
-    )
-    assert first.key != second.key
-
-
-def test_legacy_helpers_still_work():
-    class FakeComponent:
+def test_cached_decorator_without_config():
+    class FakeService:
         def __init__(self, cache: CacheService):
             self._cache = cache
             self.calls = 0
 
-        def cache_identity(self):
-            return {"model": "legacy"}
-
-        @cached_method(version="answer:v1")
+        @cached(version="answer:v1", policy=CachePolicy())
         def answer(self, prompt: str):
             self.calls += 1
             return {"prompt": prompt, "calls": self.calls}
 
-    component = FakeComponent(CacheService(MemoryStore()))
-    first = cached_call(
-        component=component,
-        cache=component._cache,
-        method_name="answer",
-        version="answer:v1",
-        inputs={"prompt": "hello"},
-        compute=lambda: {"prompt": "hello", "calls": 1},
-    )
-    second = component.answer("hello")
+    instance = FakeService(CacheService(MemoryStore()))
+    first = instance.answer("hello")
+    second = instance.answer("hello")
 
     assert first.cached is False
     assert second.cached is True
     assert second.value == first.value
 
 
-def test_async_cached_refreshes_in_background():
-    class FakeComponent:
+def test_cached_decorator_with_exclude():
+    class FakeService:
         def __init__(self, cache: CacheService):
             self._cache = cache
             self.calls = 0
 
-        def cache_identity(self):
-            return {"model": "async"}
+        @cached(version="v1", policy=CachePolicy(), exclude=frozenset({"request_id"}))
+        def answer(self, prompt: str, request_id: str | None = None):
+            self.calls += 1
+            return {"prompt": prompt, "calls": self.calls}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    first = instance.answer("hello", request_id="abc")
+    second = instance.answer("hello", request_id="xyz")
+
+    assert first.cached is False
+    assert second.cached is True
+    assert second.value == first.value
+
+
+def test_key_for_normalizes_positional_and_keyword_args():
+    def _config(self):
+        return {"provider": self.provider}
+
+    class FakeService:
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.provider = "test"
+
+        @cached(version="lookup:v1", policy=CachePolicy(), config=_config)
+        def lookup(self, query: str, limit: int = 5):
+            return {"query": query, "limit": limit}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    first_key = FakeService.lookup.key_for(instance, "democracy")
+    second_key = FakeService.lookup.key_for(instance, query="democracy")
+    assert first_key == second_key
+
+
+def test_different_operations_produce_different_keys():
+    class FakeService:
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.calls_a = 0
+            self.calls_b = 0
+
+        @cached(version="v1", policy=CachePolicy())
+        def generate(self, prompt: str):
+            self.calls_a += 1
+            return {"prompt": prompt, "calls": self.calls_a}
+
+        @cached(version="v1", policy=CachePolicy())
+        def summarize(self, prompt: str):
+            self.calls_b += 1
+            return {"prompt": prompt, "calls": self.calls_b}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    a = instance.generate("hello")
+    b = instance.summarize("hello")
+
+    assert a.cached is False
+    assert b.cached is False
+    assert a.value["calls"] == 1
+    assert b.value["calls"] == 1
+
+
+def test_async_cached_refreshes_in_background():
+    class FakeService:
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.calls = 0
 
         @cached(
             version="answer:v1",
@@ -352,12 +362,12 @@ def test_async_cached_refreshes_in_background():
             return {"prompt": prompt, "calls": self.calls}
 
     async def scenario():
-        component = FakeComponent(CacheService(MemoryStore()))
-        first = await component.answer("hello")
+        instance = FakeService(CacheService(MemoryStore()))
+        first = await instance.answer("hello")
         await asyncio.sleep(0.02)
-        stale = await component.answer("hello")
+        stale = await instance.answer("hello")
         await asyncio.sleep(0.05)
-        fresh = await component.answer("hello")
+        fresh = await instance.answer("hello")
         assert first.cached is False
         assert stale.cached is True
         assert stale.stale is True
@@ -366,11 +376,11 @@ def test_async_cached_refreshes_in_background():
     asyncio.run(scenario())
 
 
-def _counting_result(component) -> dict[str, int]:
-    component.calls += 1
-    return {"count": component.calls}
+def _counting_result(instance) -> dict[str, int]:
+    instance.calls += 1
+    return {"count": instance.calls}
 
 
-def _slow_counting_result(component) -> dict[str, int]:
+def _slow_counting_result(instance) -> dict[str, int]:
     time.sleep(0.02)
-    return _counting_result(component)
+    return _counting_result(instance)

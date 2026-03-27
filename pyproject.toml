@@ -1,7 +1,7 @@
 [project]
 name = "hypercache"
 version = "0.1.0"
-description = "Method-level exact-match caching for expensive Python components"
+description = "Explicit, persistent caching for expensive Python functions and methods"
 authors = [{ name = "Gilad Rubin", email = "gilad.rubin@gmail.com" }]
 readme = "README.md"
 requires-python = ">=3.12"

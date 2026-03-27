@@ -17,36 +17,25 @@ def make_key(payload: Mapping[str, Any]) -> str:
 
 def build_key(
     *,
-    component: Any,
+    instance: Any,
     operation: str,
     version: str,
     inputs: Mapping[str, Any],
+    config: dict[str, Any] | None = None,
 ) -> CacheKey:
     payload = {
         "version": version,
-        "component": component_name(component),
+        "instance": instance_name(instance),
         "operation": operation,
-        "config": component_config(component),
+        "config": normalize(config) if config else {},
         "inputs": normalize(dict(inputs)),
     }
     return CacheKey(key=make_key(payload), payload=payload)
 
 
-def component_name(component: Any) -> str:
-    cls = component.__class__
+def instance_name(instance: Any) -> str:
+    cls = instance.__class__
     return f"{cls.__module__}.{cls.__qualname__}"
-
-
-def component_config(component: Any) -> dict[str, Any]:
-    identity = getattr(component, "cache_identity", None)
-    if identity is None:
-        return {}
-    if not callable(identity):
-        raise TypeError("cache_identity must be callable")
-    value = normalize(identity())
-    if not isinstance(value, dict):
-        raise TypeError("cache_identity() must normalize to a dict")
-    return value
 
 
 def normalize(value: Any) -> Any:

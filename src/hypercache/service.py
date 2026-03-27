@@ -8,7 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .keys import build_key, component_config, component_name, make_key
+from .keys import build_key, instance_name, make_key
 from .stores import CacheStore, DiskCacheStore, MemoryStore
 from .types import CacheEntry, CacheMode, CachePolicy, CacheResult, utc_now
 
@@ -84,31 +84,28 @@ class CacheService:
     def delete_matching(
         self,
         *,
-        component: Any = None,
+        instance: Any = None,
         operation: str | None = None,
         version: str | None = None,
         predicate: Callable[[str, CacheEntry], bool] | None = None,
         method_name: str | None = None,
     ) -> int:
-        component_obj = (
-            component
-            if component is not None and not isinstance(component, str)
+        instance_obj = (
+            instance
+            if instance is not None and not isinstance(instance, str)
             else None
         )
-        component_value = component_name(component_obj) if component_obj is not None else component
-        target_config = component_config(component_obj) if component_obj is not None else None
+        instance_value = instance_name(instance_obj) if instance_obj is not None else instance
         target_operation = operation or method_name
 
         keys_to_delete: list[str] = []
         for key, entry in self._store.items():
             payload = entry.payload
-            if component_value is not None and payload.get("component") != component_value:
+            if instance_value is not None and payload.get("instance") != instance_value:
                 continue
             if target_operation is not None and payload.get("operation") != target_operation:
                 continue
             if version is not None and payload.get("version") != version:
-                continue
-            if target_config is not None and payload.get("config") != target_config:
                 continue
             if predicate is not None and not predicate(key, entry):
                 continue
@@ -124,21 +121,23 @@ class CacheService:
     def run(
         self,
         *,
-        component: Any,
+        instance: Any,
         operation: str,
         version: str,
         inputs: Mapping[str, Any],
         policy: CachePolicy,
         compute: Callable[[], T],
+        config: dict[str, Any] | None = None,
         mode: CacheMode = CacheMode.NORMAL,
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
         request = build_key(
-            component=component,
+            instance=instance,
             operation=operation,
             version=version,
             inputs=inputs,
+            config=config,
         )
         cached = self._read_cached_value(
             key=request.key,
@@ -179,21 +178,23 @@ class CacheService:
     async def arun(
         self,
         *,
-        component: Any,
+        instance: Any,
         operation: str,
         version: str,
         inputs: Mapping[str, Any],
         policy: CachePolicy,
         compute: Callable[[], Awaitable[T]],
+        config: dict[str, Any] | None = None,
         mode: CacheMode = CacheMode.NORMAL,
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
         request = build_key(
-            component=component,
+            instance=instance,
             operation=operation,
             version=version,
             inputs=inputs,
+            config=config,
         )
         cached = self._read_cached_value(
             key=request.key,
