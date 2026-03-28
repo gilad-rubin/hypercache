@@ -10,8 +10,6 @@ A caching layer for expensive function calls (API calls, embeddings, LLM generat
 - Normalizes non-hashable inputs (dicts, Pydantic models, dataclasses, bytes)
 - Supports TTL, stale windows, and background refresh
 
-This is **not** a "component cache" or framework. It works on any function or class method.
-
 ## Design principles
 
 ### No magic

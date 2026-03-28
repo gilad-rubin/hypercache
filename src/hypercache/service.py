@@ -8,6 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
+from ._observer import CacheTelemetry, _emit
 from .keys import build_key, instance_name, make_key
 from .stores import CacheStore, DiskCacheStore, MemoryStore
 from .types import CacheEntry, CacheMode, CachePolicy, CacheResult, utc_now
@@ -139,6 +140,8 @@ class CacheService:
             inputs=inputs,
             config=config,
         )
+        inst = request.payload.get("instance", type(instance).__qualname__)
+        mode_str = self._mode_str(mode)
         cached = self._read_cached_value(
             key=request.key,
             payload=request.payload,
@@ -155,6 +158,7 @@ class CacheService:
                     compute=compute,
                     serialize=serialize,
                 )
+                _emit(CacheTelemetry(hit=True, stale=True, refreshing=refreshing, wrote=False, mode=mode_str, instance=inst, operation=operation))
                 return CacheResult(
                     value=cached.value,
                     source="cache",
@@ -163,16 +167,18 @@ class CacheService:
                     is_stale=True,
                     is_refreshing=refreshing,
                 )
+            _emit(CacheTelemetry(hit=True, stale=cached.is_stale, refreshing=False, wrote=False, mode=mode_str, instance=inst, operation=operation))
             return cached
 
         value = compute()
-        self._write_value(
+        wrote = self._write_value(
             key=request.key,
             payload=request.payload,
             value=value,
             policy=policy,
             serialize=serialize,
         )
+        _emit(CacheTelemetry(hit=False, stale=False, refreshing=False, wrote=wrote, mode=mode_str, instance=inst, operation=operation))
         return CacheResult(value=value, source="compute", key=request.key, payload=request.payload)
 
     async def arun(
@@ -196,6 +202,8 @@ class CacheService:
             inputs=inputs,
             config=config,
         )
+        inst = request.payload.get("instance", type(instance).__qualname__)
+        mode_str = self._mode_str(mode)
         cached = self._read_cached_value(
             key=request.key,
             payload=request.payload,
@@ -212,6 +220,7 @@ class CacheService:
                     compute=compute,
                     serialize=serialize,
                 )
+                _emit(CacheTelemetry(hit=True, stale=True, refreshing=refreshing, wrote=False, mode=mode_str, instance=inst, operation=operation))
                 return CacheResult(
                     value=cached.value,
                     source="cache",
@@ -220,16 +229,18 @@ class CacheService:
                     is_stale=True,
                     is_refreshing=refreshing,
                 )
+            _emit(CacheTelemetry(hit=True, stale=cached.is_stale, refreshing=False, wrote=False, mode=mode_str, instance=inst, operation=operation))
             return cached
 
         value = await compute()
-        self._write_value(
+        wrote = self._write_value(
             key=request.key,
             payload=request.payload,
             value=value,
             policy=policy,
             serialize=serialize,
         )
+        _emit(CacheTelemetry(hit=False, stale=False, refreshing=False, wrote=wrote, mode=mode_str, instance=inst, operation=operation))
         return CacheResult(value=value, source="compute", key=request.key, payload=request.payload)
 
     def _read_cached_value(
@@ -263,9 +274,9 @@ class CacheService:
         value: T,
         policy: CachePolicy,
         serialize: Callable[[T], Any] | None = None,
-    ) -> None:
+    ) -> bool:
         if value is None and not policy.cache_none:
-            return
+            return False
 
         stored_value = serialize(value) if serialize else value
         now = utc_now()
@@ -277,6 +288,15 @@ class CacheService:
             payload=dict(payload),
         )
         self._store.set(key, entry, policy.ttl)
+        return True
+
+    @staticmethod
+    def _mode_str(mode: CacheMode) -> str:
+        if mode is CacheMode.BYPASS:
+            return "bypass"
+        if mode is CacheMode.REFRESH:
+            return "refresh_forced"
+        return "normal"
 
     def _begin_refresh(self, key: str) -> bool:
         with self._refresh_lock:

@@ -1,6 +1,6 @@
 [project]
 name = "hypercache"
-version = "0.1.0"
+version = "0.2.0"
 description = "Explicit, persistent caching for expensive Python functions and methods"
 authors = [{ name = "Gilad Rubin", email = "gilad.rubin@gmail.com" }]
 readme = "README.md"
@@ -18,7 +18,7 @@ classifiers = [
 ]
 dependencies = ["diskcache>=5.6.3"]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.5.0", "twine>=6.0.0"]
 
 [project.urls]
