@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2] - 2026-03-29
+
+- Lowered the declared minimum supported Python version from 3.12 to 3.9.
+- Expanded package classifiers to list Python 3.9 through 3.13.
+- Updated CI to validate the minimum supported version on Python 3.9.
+
 ## [0.2.1] - 2026-03-29
 
 - Added a public cache observer API with `observe_cache`, `CacheObserver`, and `CacheTelemetry`.
