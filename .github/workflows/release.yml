@@ -53,7 +53,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install project dependencies
-        run: uv sync --extra dev
+        run: uv sync --group dev
 
       - name: Update version and create commit
         env:
@@ -100,7 +100,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.validate-inputs.outputs.version }}
-          name: "nanocache v${{ needs.validate-inputs.outputs.version }}"
+          name: "hypercache v${{ needs.validate-inputs.outputs.version }}"
           draft: ${{ inputs.create_draft }}
           body: |
             Release v${{ needs.validate-inputs.outputs.version }}
@@ -108,5 +108,5 @@ jobs:
             Install with:
 
             ```bash
-            pip install nanocache
+            pip install hypercache
             ```
