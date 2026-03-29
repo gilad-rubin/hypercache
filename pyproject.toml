@@ -1,6 +1,6 @@
 [project]
 name = "hypercache"
-version = "0.2.1"
+version = "0.2.2"
 description = "Explicit, persistent caching for expensive Python functions and methods"
 authors = [{ name = "Gilad Rubin", email = "gilad.rubin@gmail.com" }]
 readme = "README.md"
