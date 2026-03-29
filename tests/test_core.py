@@ -9,11 +9,12 @@ import pytest
 from hypercache import (
     CacheMode,
     CachePolicy,
-    CacheResult,
     CacheService,
+    CacheTelemetry,
     DiskCacheStore,
     MemoryStore,
     cached,
+    observe_cache,
 )
 
 
@@ -258,6 +259,86 @@ def test_cached_decorator_with_explicit_config():
     assert cleared == 1
     assert fourth.cached is False
     assert fourth.value["calls"] == 3
+
+
+def test_observe_cache_receives_sync_telemetry():
+    class FakeService:
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.calls = 0
+
+        @cached(version="answer:v1", policy=CachePolicy())
+        def answer(self, prompt: str) -> dict[str, object]:
+            self.calls += 1
+            return {"prompt": prompt, "calls": self.calls}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    events: list[CacheTelemetry] = []
+
+    with observe_cache(events.append):
+        first = instance.answer("hello")
+        second = instance.answer("hello")
+
+    assert first.cached is False
+    assert second.cached is True
+    assert [event.hit for event in events] == [False, True]
+    assert {event.operation for event in events} == {"answer"}
+
+
+def test_observe_cache_receives_async_telemetry():
+    class FakeService:
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.calls = 0
+
+        @cached(version="answer:v1", policy=CachePolicy())
+        async def answer(self, prompt: str) -> dict[str, object]:
+            self.calls += 1
+            await asyncio.sleep(0)
+            return {"prompt": prompt, "calls": self.calls}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    events: list[CacheTelemetry] = []
+
+    async def run_calls():
+        with observe_cache(events.append):
+            first = await instance.answer("hello")
+            second = await instance.answer("hello")
+        return first, second
+
+    first, second = asyncio.run(run_calls())
+
+    assert first.cached is False
+    assert second.cached is True
+    assert [event.hit for event in events] == [False, True]
+    assert {event.operation for event in events} == {"answer"}
+
+
+def test_observe_cache_restores_previous_scope_after_nested_observer():
+    class FakeService:
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.calls = 0
+
+        @cached(version="answer:v1", policy=CachePolicy())
+        def answer(self, prompt: str) -> dict[str, object]:
+            self.calls += 1
+            return {"prompt": prompt, "calls": self.calls}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    outer_events: list[CacheTelemetry] = []
+    inner_events: list[CacheTelemetry] = []
+
+    with observe_cache(outer_events.append):
+        instance.answer("outer")
+        with observe_cache(inner_events.append):
+            instance.answer("inner")
+        instance.answer("outer")
+
+    assert [event.operation for event in outer_events] == ["answer", "answer"]
+    assert [event.hit for event in outer_events] == [False, True]
+    assert [event.operation for event in inner_events] == ["answer"]
+    assert [event.hit for event in inner_events] == [False]
 
 
 def test_cached_decorator_without_config():

@@ -8,8 +8,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
-from ._observer import CacheTelemetry, _emit
 from .keys import build_key, instance_name, make_key
+from .observer import CacheTelemetry, _emit
 from .stores import CacheStore, DiskCacheStore, MemoryStore
 from .types import CacheEntry, CacheMode, CachePolicy, CacheResult, utc_now
 
@@ -91,11 +91,7 @@ class CacheService:
         predicate: Callable[[str, CacheEntry], bool] | None = None,
         method_name: str | None = None,
     ) -> int:
-        instance_obj = (
-            instance
-            if instance is not None and not isinstance(instance, str)
-            else None
-        )
+        instance_obj = instance if instance is not None and not isinstance(instance, str) else None
         instance_value = instance_name(instance_obj) if instance_obj is not None else instance
         target_operation = operation or method_name
 
@@ -158,7 +154,17 @@ class CacheService:
                     compute=compute,
                     serialize=serialize,
                 )
-                _emit(CacheTelemetry(hit=True, stale=True, refreshing=refreshing, wrote=False, mode=mode_str, instance=inst, operation=operation))
+                _emit(
+                    CacheTelemetry(
+                        hit=True,
+                        stale=True,
+                        refreshing=refreshing,
+                        wrote=False,
+                        mode=mode_str,
+                        instance=inst,
+                        operation=operation,
+                    )
+                )
                 return CacheResult(
                     value=cached.value,
                     source="cache",
@@ -167,7 +173,17 @@ class CacheService:
                     is_stale=True,
                     is_refreshing=refreshing,
                 )
-            _emit(CacheTelemetry(hit=True, stale=cached.is_stale, refreshing=False, wrote=False, mode=mode_str, instance=inst, operation=operation))
+            _emit(
+                CacheTelemetry(
+                    hit=True,
+                    stale=cached.is_stale,
+                    refreshing=False,
+                    wrote=False,
+                    mode=mode_str,
+                    instance=inst,
+                    operation=operation,
+                )
+            )
             return cached
 
         value = compute()
@@ -178,8 +194,23 @@ class CacheService:
             policy=policy,
             serialize=serialize,
         )
-        _emit(CacheTelemetry(hit=False, stale=False, refreshing=False, wrote=wrote, mode=mode_str, instance=inst, operation=operation))
-        return CacheResult(value=value, source="compute", key=request.key, payload=request.payload)
+        _emit(
+            CacheTelemetry(
+                hit=False,
+                stale=False,
+                refreshing=False,
+                wrote=wrote,
+                mode=mode_str,
+                instance=inst,
+                operation=operation,
+            )
+        )
+        return CacheResult(
+            value=value,
+            source="compute",
+            key=request.key,
+            payload=request.payload,
+        )
 
     async def arun(
         self,
@@ -220,7 +251,17 @@ class CacheService:
                     compute=compute,
                     serialize=serialize,
                 )
-                _emit(CacheTelemetry(hit=True, stale=True, refreshing=refreshing, wrote=False, mode=mode_str, instance=inst, operation=operation))
+                _emit(
+                    CacheTelemetry(
+                        hit=True,
+                        stale=True,
+                        refreshing=refreshing,
+                        wrote=False,
+                        mode=mode_str,
+                        instance=inst,
+                        operation=operation,
+                    )
+                )
                 return CacheResult(
                     value=cached.value,
                     source="cache",
@@ -229,7 +270,17 @@ class CacheService:
                     is_stale=True,
                     is_refreshing=refreshing,
                 )
-            _emit(CacheTelemetry(hit=True, stale=cached.is_stale, refreshing=False, wrote=False, mode=mode_str, instance=inst, operation=operation))
+            _emit(
+                CacheTelemetry(
+                    hit=True,
+                    stale=cached.is_stale,
+                    refreshing=False,
+                    wrote=False,
+                    mode=mode_str,
+                    instance=inst,
+                    operation=operation,
+                )
+            )
             return cached
 
         value = await compute()
@@ -240,8 +291,23 @@ class CacheService:
             policy=policy,
             serialize=serialize,
         )
-        _emit(CacheTelemetry(hit=False, stale=False, refreshing=False, wrote=wrote, mode=mode_str, instance=inst, operation=operation))
-        return CacheResult(value=value, source="compute", key=request.key, payload=request.payload)
+        _emit(
+            CacheTelemetry(
+                hit=False,
+                stale=False,
+                refreshing=False,
+                wrote=wrote,
+                mode=mode_str,
+                instance=inst,
+                operation=operation,
+            )
+        )
+        return CacheResult(
+            value=value,
+            source="compute",
+            key=request.key,
+            payload=request.payload,
+        )
 
     def _read_cached_value(
         self,
@@ -261,10 +327,21 @@ class CacheService:
 
         value = deserialize(entry.value) if deserialize else entry.value
         if not entry.is_stale(policy.stale):
-            return CacheResult(value=value, source="cache", key=key, payload=payload)
+            return CacheResult(
+                value=value,
+                source="cache",
+                key=key,
+                payload=payload,
+            )
         if not policy.refresh_in_background:
             return None
-        return CacheResult(value=value, source="cache", key=key, payload=payload, is_stale=True)
+        return CacheResult(
+            value=value,
+            source="cache",
+            key=key,
+            payload=payload,
+            is_stale=True,
+        )
 
     def _write_value(
         self,

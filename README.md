@@ -26,6 +26,34 @@ Explicit, persistent caching for expensive Python functions and methods.
 pip install hypercache
 ```
 
+## Observe cache telemetry
+
+Any library can observe cache decisions by installing a scoped callback:
+
+```python
+from hypercache import CachePolicy, CacheService, MemoryStore, observe_cache
+
+cache = CacheService(MemoryStore())
+events = []
+
+with observe_cache(events.append):
+    cache.run(
+        instance="demo",
+        operation="embed",
+        version="embed:v1",
+        inputs={"text": "hello"},
+        policy=CachePolicy(),
+        compute=lambda: {"vector": [1, 2, 3]},
+    )
+
+event = events[0]
+assert event.hit is False
+assert event.operation == "embed"
+```
+
+The observer is task-local via ``ContextVar``, so nested async calls stay scoped to
+the current request or workflow run.
+
 ## Basic usage
 
 ```python

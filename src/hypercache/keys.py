@@ -70,6 +70,5 @@ def normalize(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): normalize(item) for key, item in value.items()}
     raise TypeError(
-        f"Unsupported cache value {type(value)!r}. "
-        "Add cache_key() or pre-normalize before caching."
+        f"Unsupported cache value {type(value)!r}. Add cache_key() or pre-normalize before caching."
     )

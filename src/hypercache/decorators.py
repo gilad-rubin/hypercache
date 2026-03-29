@@ -24,7 +24,10 @@ def build_inputs(
     return {name: value for name, value in bound.arguments.items() if name != "self"}
 
 
-def _resolve_config(config_fn: Callable[..., dict[str, Any]] | None, instance: Any) -> dict[str, Any] | None:
+def _resolve_config(
+    config_fn: Callable[..., dict[str, Any]] | None,
+    instance: Any,
+) -> dict[str, Any] | None:
     if config_fn is None:
         return None
     return config_fn(instance)
