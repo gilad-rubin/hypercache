@@ -15,13 +15,16 @@ A caching layer for expensive function calls (API calls, embeddings, LLM generat
 ### No magic
 - No hidden method lookups (`cache_identity`, `__cache_key__`, etc.)
 - No Protocols that silently match by method name
-- Every cache-relevant decision must be visible at the call site or in the decorator
+- Cache behavior must not depend on hidden conventions, implicit method names, or parameter magic
+- Sensible documented defaults are fine when they are stable, predictable, and easy to override
 
 ### Explicit over implicit
 - `config=` in the decorator: explicitly pass a function that returns instance state
 - `inputs=` in the decorator: explicitly pass a function to shape call inputs
 - `exclude=` in the decorator: explicitly name args to exclude from the key
-- Default behavior (auto-capture all inputs from signature) is the only implicit behavior allowed
+- Prefer explicit configuration for cache-key shaping and instance-derived state
+- Documented API defaults are allowed when they remove boilerplate without introducing hidden behavior
+- Default behavior (auto-capture all inputs from signature) remains the canonical implicit behavior
 
 ### DRY
 - Inputs are auto-captured from the function signature — no duplicate parameter lists
