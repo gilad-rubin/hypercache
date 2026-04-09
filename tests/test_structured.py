@@ -113,11 +113,9 @@ def test_dataclass_structured_values_round_trip_through_disk_cache(tmp_path):
     first = service.answer("hello")
     second = service.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
-    assert isinstance(second.value, StructuredAnswer)
-    assert isinstance(second.value.citations, CitationBundle)
+    assert isinstance(first, StructuredAnswer)
+    assert isinstance(first.citations, CitationBundle)
+    assert second == first
     assert service.calls == 1
 
 
@@ -127,10 +125,8 @@ def test_pydantic_style_structured_values_round_trip_through_disk_cache(tmp_path
     first = service.answer("hello")
     second = service.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
-    assert isinstance(second.value, FakeParsedModel)
+    assert isinstance(first, FakeParsedModel)
+    assert second == first
     assert service.calls == 1
 
 
