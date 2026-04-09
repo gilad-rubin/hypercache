@@ -3,6 +3,7 @@ from .decorators import CachedMethod, cached
 from .observer import CacheObserver, CacheTelemetry, observe_cache
 from .service import CacheService
 from .stores import CacheStore, DiskCacheStore, MemoryStore
+from .structured import deserialize_structured_value, serialize_structured_value
 from .types import CacheEntry, CacheKey, CacheMode, CachePolicy, CacheResult
 
 __all__ = [
@@ -20,5 +21,7 @@ __all__ = [
     "DiskCacheStore",
     "MemoryStore",
     "cached",
+    "deserialize_structured_value",
     "observe_cache",
+    "serialize_structured_value",
 ]

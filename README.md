@@ -66,8 +66,10 @@ def _embedder_config(self) -> dict:
 
 
 class Embedder:
+    cache: CacheService | None
+
     def __init__(self, model: str = "text-embedding-3-large", dimensions: int = 1536):
-        self._cache = CacheService(MemoryStore(max_entries=512))
+        self.cache = CacheService(MemoryStore(max_entries=512))
         self.model = model
         self.dimensions = dimensions
 
@@ -98,8 +100,10 @@ def _llm_config(self) -> dict:
 
 
 class LLM:
+    cache: CacheService | None
+
     def __init__(self, model: str, temperature: float):
-        self._cache = CacheService(MemoryStore())
+        self.cache = CacheService(MemoryStore())
         self.model = model
         self.temperature = temperature
 
@@ -111,6 +115,9 @@ class LLM:
     async def generate_structured(self, prompt: str, schema: dict) -> dict:
         ...
 ```
+
+By default, `@cached(...)` resolves `self.cache`. If you prefer a different
+attribute name, pass `cache="_cache"` explicitly and declare that attribute on the class.
 
 ## Excluding inputs from the key
 
@@ -136,6 +143,30 @@ from pathlib import Path
 from hypercache import DiskCacheStore
 
 cache = CacheService(DiskCacheStore(Path("./cache")))
+```
+
+## Structured return values
+
+For Pydantic-style models and dataclasses, use explicit value codecs so disk
+persistence stores self-describing plain data instead of relying on live Python objects:
+
+```python
+from hypercache import (
+    CachePolicy,
+    cached,
+    deserialize_structured_value,
+    serialize_structured_value,
+)
+
+
+@cached(
+    version="structured:v1",
+    policy=CachePolicy(),
+    serialize=serialize_structured_value,
+    deserialize=deserialize_structured_value,
+)
+async def generate_structured(self, prompt: str) -> MyStructuredModel:
+    ...
 ```
 
 ## Direct usage (no decorator)
