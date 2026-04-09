@@ -11,6 +11,8 @@ from .types import CacheMode, CachePolicy
 
 CacheResolver = Union[str, Callable[[Any], Optional[CacheService]]]
 DEFAULT_CACHE = "cache"
+DEFAULT_VERSION = "v1"
+DEFAULT_POLICY = CachePolicy()
 
 
 def build_inputs(
@@ -188,8 +190,8 @@ class CachedMethod:
 
 def cached(
     *,
-    version: str,
-    policy: CachePolicy,
+    version: str = DEFAULT_VERSION,
+    policy: CachePolicy = DEFAULT_POLICY,
     operation: str | None = None,
     cache: CacheResolver = DEFAULT_CACHE,
     cache_attr: str | None = None,
