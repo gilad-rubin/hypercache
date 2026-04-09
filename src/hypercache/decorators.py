@@ -3,13 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import wraps
 from inspect import iscoroutinefunction, signature
-from typing import Any
+from typing import Any, Optional, Union
 
 from .keys import build_key
 from .service import CacheService
 from .types import CacheMode, CachePolicy
 
-CacheResolver = str | Callable[[Any], CacheService | None]
+CacheResolver = Union[str, Callable[[Any], Optional[CacheService]]]
 DEFAULT_CACHE = "cache"
 
 

@@ -476,11 +476,14 @@ def test_async_cached_refreshes_in_background():
 
 
 def test_cached_decorator_requires_declared_cache_attribute():
-    with pytest.raises(TypeError, match="does not declare `cache: CacheService | None`"):
+    with pytest.raises((RuntimeError, TypeError)) as exc_info:
         class BadService:
             @cached(version="answer:v1", policy=CachePolicy())
             def answer(self, prompt: str):
                 return prompt
+
+    error = exc_info.value.__cause__ or exc_info.value
+    assert "does not declare `cache: CacheService | None`" in str(error)
 
 
 def test_cached_decorator_supports_explicit_legacy_cache_attribute():
