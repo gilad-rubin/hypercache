@@ -57,6 +57,8 @@ the current request or workflow run.
 ## Basic usage
 
 ```python
+from __future__ import annotations
+
 from datetime import timedelta
 from hypercache import CachePolicy, CacheService, MemoryStore, cached
 
@@ -95,6 +97,8 @@ class Embedder:
 Define the config function once, reference it from multiple decorators:
 
 ```python
+from __future__ import annotations
+
 def _llm_config(self) -> dict:
     return {"model": self.model, "temperature": self.temperature}
 

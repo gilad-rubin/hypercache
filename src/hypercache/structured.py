@@ -10,6 +10,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 MARKER = "__hypercache__"
 STRUCTURED_V1 = "structured:v1"
+DICT_V1 = "dict:v1"
 BYTES_V1 = "bytes:v1"
 PATH_V1 = "path:v1"
 ENUM_V1 = "enum:v1"
@@ -68,13 +69,19 @@ def _to_plain_data(value: Any) -> Any:
     if isinstance(value, list):
         return [_to_plain_data(item) for item in value]
     if isinstance(value, dict):
-        return {str(key): _to_plain_data(item) for key, item in value.items()}
+        return {
+            MARKER: DICT_V1,
+            "data": [
+                {"key": _to_plain_data(key), "value": _to_plain_data(item)}
+                for key, item in value.items()
+            ],
+        }
     return value
 
 
 def _plain_fields(value: Any) -> dict[str, Any]:
     if _is_pydantic_instance(value):
-        data = value.model_dump(mode="json")
+        data = value.model_dump(mode="python")
         return {str(key): _to_plain_data(item) for key, item in data.items()}
 
     if is_dataclass(value):
@@ -89,6 +96,10 @@ def _from_plain_data(value: Any, *, expected_type: Any | None = None) -> Any:
         if marker == STRUCTURED_V1:
             nested_type = _load_type(value["type"])
             return _from_plain_data(value["data"], expected_type=nested_type)
+        if marker == DICT_V1:
+            if get_origin(expected_type) is dict:
+                return _from_generic(value, expected_type)
+            return _decode_mapping(value["data"])
         if marker == BYTES_V1:
             return base64.b64decode(value["data"].encode("ascii"))
         if marker == PATH_V1:
@@ -97,8 +108,12 @@ def _from_plain_data(value: Any, *, expected_type: Any | None = None) -> Any:
             enum_type = _load_type(value["type"])
             return enum_type(_from_plain_data(value["data"]))
         if marker == TUPLE_V1:
+            if get_origin(expected_type) is tuple:
+                return _from_generic(value["data"], expected_type)
             return tuple(_from_plain_data(item) for item in value["data"])
         if marker == SET_V1:
+            if get_origin(expected_type) is set:
+                return _from_generic(value["data"], expected_type)
             return {_from_plain_data(item) for item in value["data"]}
 
     if expected_type is None:
@@ -142,6 +157,10 @@ def _from_generic(value: Any, expected_type: Any) -> Any:
     if origin is tuple:
         if len(args) == 2 and args[1] is Ellipsis:
             return tuple(_from_plain_data(item, expected_type=args[0]) for item in value)
+        if len(value) != len(args):
+            raise ValueError(
+                f"Expected tuple with {len(args)} items, got {len(value)} items"
+            )
         return tuple(
             _from_plain_data(item, expected_type=item_type)
             for item, item_type in zip(value, args)
@@ -152,7 +171,9 @@ def _from_generic(value: Any, expected_type: Any) -> Any:
         return {_from_plain_data(item, expected_type=item_type) for item in value}
 
     if origin is dict:
-        _, value_type = args if len(args) == 2 else (Any, Any)
+        key_type, value_type = args if len(args) == 2 else (Any, Any)
+        if isinstance(value, Mapping) and value.get(MARKER) == DICT_V1:
+            return _decode_mapping(value["data"], key_type=key_type, value_type=value_type)
         return {
             key: _from_plain_data(item, expected_type=value_type)
             for key, item in value.items()
@@ -185,6 +206,20 @@ def _build_dataclass(dataclass_type: type[Any], value: Mapping[str, Any]) -> Any
         field_type = type_hints.get(field.name, Any)
         kwargs[field.name] = _from_plain_data(value[field.name], expected_type=field_type)
     return dataclass_type(**kwargs)
+
+
+def _decode_mapping(
+    items: list[Mapping[str, Any]],
+    *,
+    key_type: Any = Any,
+    value_type: Any = Any,
+) -> dict[Any, Any]:
+    decoded: dict[Any, Any] = {}
+    for item in items:
+        key = _from_plain_data(item["key"], expected_type=key_type)
+        value = _from_plain_data(item["value"], expected_type=value_type)
+        decoded[key] = value
+    return decoded
 
 
 def _structured_kind(value_type: type[Any]) -> str | None:

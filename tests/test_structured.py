@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict
 
 from hypercache import (
     CachePolicy,
     CacheService,
     DiskCacheStore,
+    MemoryStore,
     cached,
     deserialize_structured_value,
     serialize_structured_value,
 )
+from hypercache.keys import build_key
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,16 @@ class CitationBundle:
 class StructuredAnswer:
     text: str
     citations: CitationBundle
+
+
+@dataclass(frozen=True)
+class MappingAnswer:
+    values: Dict[object, str]
+
+
+@dataclass(frozen=True)
+class FixedTupleAnswer:
+    coords: tuple[int, int]
 
 
 class FakeParsedModel:
@@ -119,3 +132,58 @@ def test_pydantic_style_structured_values_round_trip_through_disk_cache(tmp_path
     assert second.value == first.value
     assert isinstance(second.value, FakeParsedModel)
     assert service.calls == 1
+
+
+def test_structured_values_preserve_non_string_dict_keys():
+    value = MappingAnswer(values={1: "int", "1": "str"})
+
+    decoded = deserialize_structured_value(serialize_structured_value(value))
+
+    assert decoded == value
+    assert set(decoded.values) == {1, "1"}
+
+
+def test_structured_values_raise_on_fixed_tuple_length_mismatch():
+    encoded = serialize_structured_value(FixedTupleAnswer(coords=(1, 2)))
+    encoded["data"]["data"]["coords"]["data"].append(3)
+
+    try:
+        deserialize_structured_value(encoded)
+    except ValueError as exc:
+        assert "Expected tuple with 2 items" in str(exc)
+    else:
+        raise AssertionError("Expected deserialize_structured_value to raise ValueError")
+
+
+def test_bad_structured_cache_entries_fall_back_to_recompute():
+    cache = CacheService(MemoryStore())
+    request = build_key(
+        instance="structured-demo",
+        operation="answer",
+        version="structured:v1",
+        inputs={"prompt": "hello"},
+        config=None,
+    )
+    cache.put(
+        request.key,
+        {
+            "__hypercache__": "structured:v1",
+            "type": "missing.module:Answer",
+            "data": {},
+        },
+        payload=request.payload,
+    )
+
+    result = cache.run(
+        instance="structured-demo",
+        operation="answer",
+        version="structured:v1",
+        inputs={"prompt": "hello"},
+        policy=CachePolicy(),
+        compute=lambda: "fresh",
+        deserialize=deserialize_structured_value,
+    )
+
+    assert result.cached is False
+    assert result.value == "fresh"
+    assert cache.get(request.key) == "fresh"
