@@ -107,7 +107,7 @@ class CachedMethod:
                 mode = _extract_mode(kwargs)
                 inputs = self._build_inputs(instance, args, kwargs)
                 config = _resolve_config(self.config, instance)
-                return await cache.arun(
+                result = await cache.arun(
                     instance=instance,
                     operation=self.operation,
                     version=self.version,
@@ -119,6 +119,7 @@ class CachedMethod:
                     serialize=self.serialize,
                     deserialize=self.deserialize,
                 )
+                return result.value
 
         else:
 
@@ -127,7 +128,7 @@ class CachedMethod:
                 mode = _extract_mode(kwargs)
                 inputs = self._build_inputs(instance, args, kwargs)
                 config = _resolve_config(self.config, instance)
-                return cache.run(
+                result = cache.run(
                     instance=instance,
                     operation=self.operation,
                     version=self.version,
@@ -139,6 +140,7 @@ class CachedMethod:
                     serialize=self.serialize,
                     deserialize=self.deserialize,
                 )
+                return result.value
 
         bound._cache_descriptor = self
         bound._cache_instance = instance

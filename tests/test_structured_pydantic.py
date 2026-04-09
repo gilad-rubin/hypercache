@@ -76,10 +76,8 @@ def test_pydantic_values_round_trip_through_disk_cache(tmp_path):
     first = service.answer("hello")
     second = service.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
-    assert isinstance(second.value, ParsedAnswer)
+    assert isinstance(first, ParsedAnswer)
+    assert second == first
     assert service.calls == 1
 
 
@@ -89,10 +87,8 @@ def test_pydantic_values_preserve_python_types_through_disk_cache(tmp_path):
     first = service.answer("hello")
     second = service.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert isinstance(second.value.path, Path)
-    assert isinstance(second.value.tone, Tone)
-    assert isinstance(second.value.blob, bytes)
-    assert second.value == first.value
+    assert isinstance(second.path, Path)
+    assert isinstance(second.tone, Tone)
+    assert isinstance(second.blob, bytes)
+    assert second == first
     assert service.calls == 1

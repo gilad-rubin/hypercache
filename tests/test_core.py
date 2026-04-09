@@ -253,14 +253,11 @@ def test_cached_decorator_with_explicit_config():
     cleared = FakeService.answer.clear(instance)
     fourth = instance.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
-    assert third.cached is False
-    assert third.value["calls"] == 2
+    assert first == {"prompt": "hello", "system_prompt": "", "calls": 1}
+    assert second == first
+    assert third["calls"] == 2
     assert cleared == 1
-    assert fourth.cached is False
-    assert fourth.value["calls"] == 3
+    assert fourth["calls"] == 3
 
 
 def test_observe_cache_receives_sync_telemetry():
@@ -283,8 +280,8 @@ def test_observe_cache_receives_sync_telemetry():
         first = instance.answer("hello")
         second = instance.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
+    assert first == {"prompt": "hello", "calls": 1}
+    assert second == first
     assert [event.hit for event in events] == [False, True]
     assert {event.operation for event in events} == {"answer"}
 
@@ -314,8 +311,8 @@ def test_observe_cache_receives_async_telemetry():
 
     first, second = asyncio.run(run_calls())
 
-    assert first.cached is False
-    assert second.cached is True
+    assert first == {"prompt": "hello", "calls": 1}
+    assert second == first
     assert [event.hit for event in events] == [False, True]
     assert {event.operation for event in events} == {"answer"}
 
@@ -366,9 +363,9 @@ def test_cached_decorator_without_config():
     first = instance.answer("hello")
     second = instance.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
+    assert first == {"prompt": "hello", "calls": 1}
+    assert second == first
+    assert instance.calls == 1
 
 
 def test_cached_decorator_uses_default_version_and_policy():
@@ -392,9 +389,9 @@ def test_cached_decorator_uses_default_version_and_policy():
     assert FakeService.answer.version == "v1"
     assert FakeService.answer.policy == CachePolicy()
     assert request.payload["version"] == "v1"
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
+    assert first == {"prompt": "hello", "calls": 1}
+    assert second == first
+    assert instance.calls == 1
 
 
 def test_cached_decorator_with_exclude():
@@ -414,9 +411,9 @@ def test_cached_decorator_with_exclude():
     first = instance.answer("hello", request_id="abc")
     second = instance.answer("hello", request_id="xyz")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
+    assert first == {"prompt": "hello", "calls": 1}
+    assert second == first
+    assert instance.calls == 1
 
 
 def test_key_for_normalizes_positional_and_keyword_args():
@@ -463,10 +460,10 @@ def test_different_operations_produce_different_keys():
     a = instance.generate("hello")
     b = instance.summarize("hello")
 
-    assert a.cached is False
-    assert b.cached is False
-    assert a.value["calls"] == 1
-    assert b.value["calls"] == 1
+    assert a["calls"] == 1
+    assert b["calls"] == 1
+    assert instance.calls_a == 1
+    assert instance.calls_b == 1
 
 
 def test_async_cached_refreshes_in_background():
@@ -493,10 +490,9 @@ def test_async_cached_refreshes_in_background():
         stale = await instance.answer("hello")
         await asyncio.sleep(0.05)
         fresh = await instance.answer("hello")
-        assert first.cached is False
-        assert stale.cached is True
-        assert stale.stale is True
-        assert fresh.value["calls"] == 2
+        assert first["calls"] == 1
+        assert stale == first  # stale returns old cached value
+        assert fresh["calls"] == 2  # background refresh completed
 
     asyncio.run(scenario())
 
@@ -529,9 +525,9 @@ def test_cached_decorator_supports_explicit_legacy_cache_attribute():
     first = instance.answer("hello")
     second = instance.answer("hello")
 
-    assert first.cached is False
-    assert second.cached is True
-    assert second.value == first.value
+    assert first == {"prompt": "hello", "calls": 1}
+    assert second == first
+    assert instance.calls == 1
 
 
 def _counting_result(instance) -> dict[str, int]:
