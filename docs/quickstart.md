@@ -21,13 +21,13 @@ class Embedder:
         self._cache = CacheService(MemoryStore())
         self.model = model
 
-    @cached(version="embed:v1", policy=CachePolicy(), config=_embedder_config)
+    @cached(config=_embedder_config)
     def embed(self, text: str) -> dict:
         # expensive API call
         return {"vector": [1, 2, 3], "text": text}
 ```
 
-The decorator auto-captures all method inputs from the signature. `config=` explicitly declares which instance state affects the cache key.
+The decorator auto-captures all method inputs from the signature. `config=` explicitly declares which instance state affects the cache key. `version=` defaults to `"v1"` and `policy=` defaults to `CachePolicy()`.
 
 ```python
 embedder = Embedder()
@@ -45,7 +45,7 @@ class AsyncEmbedder:
         self._cache = CacheService(MemoryStore())
         self.model = "text-embedding-3-large"
 
-    @cached(version="embed:v1", policy=CachePolicy(), config=_embedder_config)
+    @cached(config=_embedder_config)
     async def embed(self, text: str) -> dict:
         return await call_api(text)
 ```

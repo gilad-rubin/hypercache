@@ -76,7 +76,6 @@ class Embedder:
         self.dimensions = dimensions
 
     @cached(
-        version="embed:v1",
         policy=CachePolicy(
             ttl=timedelta(hours=6),
             stale=timedelta(minutes=30),
@@ -90,7 +89,8 @@ class Embedder:
 
 - **Inputs** are auto-captured from the function signature. No duplicate parameter lists.
 - **`config=`** explicitly declares which instance state affects the cache key. No hidden method lookups.
-- **`version=`** lets you invalidate all cached values when the implementation changes.
+- **`version=`** defaults to `"v1"` and lets you invalidate all cached values when the implementation changes.
+- **`policy=`** defaults to `CachePolicy()` when you do not need TTL or stale behavior.
 
 ## Sharing config across methods
 
@@ -111,11 +111,11 @@ class LLM:
         self.model = model
         self.temperature = temperature
 
-    @cached(version="generate:v1", policy=CachePolicy(), config=_llm_config)
+    @cached(config=_llm_config)
     async def generate(self, prompt: str) -> dict:
         ...
 
-    @cached(version="structured:v1", policy=CachePolicy(), config=_llm_config)
+    @cached(version="structured:v1", config=_llm_config)
     async def generate_structured(self, prompt: str, schema: dict) -> dict:
         ...
 ```
@@ -129,8 +129,6 @@ Use `exclude=` to drop arguments that shouldn't affect caching:
 
 ```python
 @cached(
-    version="embed:v1",
-    policy=CachePolicy(),
     config=_embedder_config,
     exclude=frozenset({"request_id", "trace_id"}),
 )
@@ -165,7 +163,6 @@ from hypercache import (
 
 @cached(
     version="structured:v1",
-    policy=CachePolicy(),
     serialize=serialize_structured_value,
     deserialize=deserialize_structured_value,
 )

@@ -371,6 +371,32 @@ def test_cached_decorator_without_config():
     assert second.value == first.value
 
 
+def test_cached_decorator_uses_default_version_and_policy():
+    class FakeService:
+        cache: CacheService | None
+
+        def __init__(self, cache: CacheService):
+            self.cache = cache
+            self.calls = 0
+
+        @cached()
+        def answer(self, prompt: str):
+            self.calls += 1
+            return {"prompt": prompt, "calls": self.calls}
+
+    instance = FakeService(CacheService(MemoryStore()))
+    request = FakeService.answer.cache_request_for(instance, "hello")
+    first = instance.answer("hello")
+    second = instance.answer("hello")
+
+    assert FakeService.answer.version == "v1"
+    assert FakeService.answer.policy == CachePolicy()
+    assert request.payload["version"] == "v1"
+    assert first.cached is False
+    assert second.cached is True
+    assert second.value == first.value
+
+
 def test_cached_decorator_with_exclude():
     class FakeService:
         cache: CacheService | None
