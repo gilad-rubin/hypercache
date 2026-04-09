@@ -325,7 +325,19 @@ class CacheService:
         if entry is None:
             return None
 
-        value = deserialize(entry.value) if deserialize else entry.value
+        try:
+            value = deserialize(entry.value) if deserialize else entry.value
+        except Exception:
+            log.warning(
+                "Failed to deserialize cache entry for key %s (instance=%s operation=%s); "
+                "evicting and recomputing.",
+                key,
+                payload.get("instance"),
+                payload.get("operation"),
+                exc_info=True,
+            )
+            self.delete(key)
+            return None
         if not entry.is_stale(policy.stale):
             return CacheResult(
                 value=value,

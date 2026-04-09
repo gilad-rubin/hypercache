@@ -21,8 +21,11 @@ classifiers = [
 ]
 dependencies = ["diskcache>=5.6.3"]
 
+[project.optional-dependencies]
+pydantic = ["pydantic>=2"]
+
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.5.0", "twine>=6.0.0"]
+dev = ["pydantic>=2", "pytest>=8.0", "ruff>=0.5.0", "twine>=6.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/gilad-rubin/hypercache"

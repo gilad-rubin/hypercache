@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import wraps
 from inspect import iscoroutinefunction, signature
-from typing import Any
+from typing import Any, Optional, Union
 
 from .keys import build_key
 from .service import CacheService
 from .types import CacheMode, CachePolicy
+
+CacheResolver = Union[str, Callable[[Any], Optional[CacheService]]]
+DEFAULT_CACHE = "cache"
 
 
 def build_inputs(
@@ -41,7 +44,7 @@ class CachedMethod:
         version: str,
         policy: CachePolicy,
         operation: str,
-        cache_attr: str = "_cache",
+        cache: CacheResolver = DEFAULT_CACHE,
         config: Callable[..., dict[str, Any]] | None = None,
         inputs: Callable[..., dict[str, Any]] | None = None,
         exclude: frozenset[str] | None = None,
@@ -52,7 +55,7 @@ class CachedMethod:
         self.version = version
         self.policy = policy
         self.operation = operation
-        self.cache_attr = cache_attr
+        self.cache = cache
         self.config = config
         self.inputs_fn = inputs
         self.exclude = exclude
@@ -61,21 +64,39 @@ class CachedMethod:
         self.is_async = iscoroutinefunction(func)
         wraps(func)(self)
 
+    def __set_name__(self, owner: type, name: str) -> None:
+        if isinstance(self.cache, str) and not _owner_declares_attribute(owner, self.cache):
+            raise TypeError(
+                f"{owner.__qualname__}.{name} uses @cached(cache={self.cache!r}) but "
+                f"{owner.__qualname__} does not declare `{self.cache}: CacheService | None`."
+            )
+
     def _build_inputs(self, instance: Any, args: tuple, kwargs: dict) -> dict[str, Any]:
         raw = build_inputs(self.func, instance, args, kwargs, self.inputs_fn)
         if self.exclude:
             return {k: v for k, v in raw.items() if k not in self.exclude}
         return raw
 
+    def _resolve_cache(self, instance: Any) -> CacheService | None:
+        if isinstance(self.cache, str):
+            cache = getattr(instance, self.cache, None)
+            label = self.cache
+        else:
+            cache = self.cache(instance)
+            label = "cache resolver"
+        if cache is None:
+            return None
+        if not isinstance(cache, CacheService):
+            raise TypeError(f"{label} must resolve to CacheService | None")
+        return cache
+
     def __get__(self, instance: Any, owner: type | None = None) -> Any:
         if instance is None:
             return self
 
-        cache = getattr(instance, self.cache_attr, None)
+        cache = self._resolve_cache(instance)
         if cache is None:
             return self.func.__get__(instance, owner)
-        if not isinstance(cache, CacheService):
-            raise TypeError(f"{self.cache_attr} must be a CacheService")
 
         if self.is_async:
 
@@ -133,13 +154,13 @@ class CachedMethod:
         ).key
 
     def invalidate(self, instance: Any, *args: Any, **kwargs: Any) -> None:
-        cache = getattr(instance, self.cache_attr, None)
-        if isinstance(cache, CacheService):
+        cache = self._resolve_cache(instance)
+        if cache is not None:
             cache.delete(self.key_for(instance, *args, **kwargs))
 
     def clear(self, instance: Any) -> int:
-        cache = getattr(instance, self.cache_attr, None)
-        if not isinstance(cache, CacheService):
+        cache = self._resolve_cache(instance)
+        if cache is None:
             return 0
         return cache.delete_matching(
             instance=instance,
@@ -170,20 +191,26 @@ def cached(
     version: str,
     policy: CachePolicy,
     operation: str | None = None,
-    cache_attr: str = "_cache",
+    cache: CacheResolver = DEFAULT_CACHE,
+    cache_attr: str | None = None,
     config: Callable[..., dict[str, Any]] | None = None,
     inputs: Callable[..., dict[str, Any]] | None = None,
     exclude: frozenset[str] | None = None,
     serialize: Callable[[Any], Any] | None = None,
     deserialize: Callable[[Any], Any] | None = None,
 ) -> Callable[[Callable[..., Any]], CachedMethod]:
+    if cache_attr is not None:
+        if cache != DEFAULT_CACHE:
+            raise TypeError("Pass either cache or cache_attr, not both")
+        cache = cache_attr
+
     def decorator(func: Callable[..., Any]) -> CachedMethod:
         return CachedMethod(
             func,
             version=version,
             policy=policy,
             operation=operation or func.__name__,
-            cache_attr=cache_attr,
+            cache=cache,
             config=config,
             inputs=inputs,
             exclude=exclude,
@@ -212,3 +239,12 @@ def _extract_mode(kwargs: dict[str, Any]) -> CacheMode:
     if refresh_cache:
         return CacheMode.REFRESH
     return CacheMode.NORMAL
+
+
+def _owner_declares_attribute(owner: type, attr: str) -> bool:
+    for base in owner.__mro__:
+        if attr in getattr(base, "__annotations__", {}):
+            return True
+        if attr in base.__dict__:
+            return True
+    return False

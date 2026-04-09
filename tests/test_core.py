@@ -233,8 +233,10 @@ def test_cached_decorator_with_explicit_config():
         return {"model": self.model}
 
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.model = "mock"
             self.calls = 0
 
@@ -263,8 +265,10 @@ def test_cached_decorator_with_explicit_config():
 
 def test_observe_cache_receives_sync_telemetry():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls = 0
 
         @cached(version="answer:v1", policy=CachePolicy())
@@ -287,8 +291,10 @@ def test_observe_cache_receives_sync_telemetry():
 
 def test_observe_cache_receives_async_telemetry():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls = 0
 
         @cached(version="answer:v1", policy=CachePolicy())
@@ -316,8 +322,10 @@ def test_observe_cache_receives_async_telemetry():
 
 def test_observe_cache_restores_previous_scope_after_nested_observer():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls = 0
 
         @cached(version="answer:v1", policy=CachePolicy())
@@ -343,8 +351,10 @@ def test_observe_cache_restores_previous_scope_after_nested_observer():
 
 def test_cached_decorator_without_config():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls = 0
 
         @cached(version="answer:v1", policy=CachePolicy())
@@ -363,8 +373,10 @@ def test_cached_decorator_without_config():
 
 def test_cached_decorator_with_exclude():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls = 0
 
         @cached(version="v1", policy=CachePolicy(), exclude=frozenset({"request_id"}))
@@ -386,8 +398,10 @@ def test_key_for_normalizes_positional_and_keyword_args():
         return {"provider": self.provider}
 
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.provider = "test"
 
         @cached(version="lookup:v1", policy=CachePolicy(), config=_config)
@@ -402,8 +416,10 @@ def test_key_for_normalizes_positional_and_keyword_args():
 
 def test_different_operations_produce_different_keys():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls_a = 0
             self.calls_b = 0
 
@@ -429,8 +445,10 @@ def test_different_operations_produce_different_keys():
 
 def test_async_cached_refreshes_in_background():
     class FakeService:
+        cache: CacheService | None
+
         def __init__(self, cache: CacheService):
-            self._cache = cache
+            self.cache = cache
             self.calls = 0
 
         @cached(
@@ -455,6 +473,39 @@ def test_async_cached_refreshes_in_background():
         assert fresh.value["calls"] == 2
 
     asyncio.run(scenario())
+
+
+def test_cached_decorator_requires_declared_cache_attribute():
+    with pytest.raises((RuntimeError, TypeError)) as exc_info:
+        class BadService:
+            @cached(version="answer:v1", policy=CachePolicy())
+            def answer(self, prompt: str):
+                return prompt
+
+    error = exc_info.value.__cause__ or exc_info.value
+    assert "does not declare `cache: CacheService | None`" in str(error)
+
+
+def test_cached_decorator_supports_explicit_legacy_cache_attribute():
+    class LegacyService:
+        _cache: CacheService | None
+
+        def __init__(self, cache: CacheService):
+            self._cache = cache
+            self.calls = 0
+
+        @cached(version="answer:v1", policy=CachePolicy(), cache="_cache")
+        def answer(self, prompt: str):
+            self.calls += 1
+            return {"prompt": prompt, "calls": self.calls}
+
+    instance = LegacyService(CacheService(MemoryStore()))
+    first = instance.answer("hello")
+    second = instance.answer("hello")
+
+    assert first.cached is False
+    assert second.cached is True
+    assert second.value == first.value
 
 
 def _counting_result(instance) -> dict[str, int]:
