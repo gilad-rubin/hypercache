@@ -26,6 +26,13 @@ Explicit, persistent caching for expensive Python functions and methods.
 pip install hypercache
 ```
 
+## Documentation
+
+- [Quickstart](docs/quickstart.md)
+- [Eval loops](docs/eval-loops.md) — make iterative AI-pipeline evaluation affordable: change one parameter, recompute only the affected calls
+- [Design decisions](docs/design.md)
+- [API reference](docs/api.md)
+
 ## Observe cache telemetry
 
 Any library can observe cache decisions by installing a scoped callback:
