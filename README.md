@@ -89,6 +89,7 @@ class Embedder:
 
 - **Inputs** are auto-captured from the function signature. No duplicate parameter lists.
 - **`config=`** explicitly declares which instance state affects the cache key. No hidden method lookups.
+  Without it, two instances of the same class produce **identical** keys — see [Two instances, one cache](docs/design.md#two-instances-one-cache-why-config-is-load-bearing).
 - **`version=`** defaults to `"v1"` and lets you invalidate all cached values when the implementation changes.
 - **`policy=`** defaults to `CachePolicy()` when you do not need TTL or stale behavior.
 

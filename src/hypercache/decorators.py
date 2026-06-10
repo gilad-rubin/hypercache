@@ -203,6 +203,28 @@ def cached(
     serialize: Callable[[Any], Any] | None = None,
     deserialize: Callable[[Any], Any] | None = None,
 ) -> Callable[[Callable[..., Any]], CachedMethod]:
+    """Cache a method's return value, keyed on its captured inputs.
+
+    The cache key combines the owning class name (``module.qualname``),
+    the operation, ``version``, the auto-captured call arguments, and
+    ``config``. Instance state is never inspected implicitly: two instances
+    of the same class produce IDENTICAL keys unless ``config=`` returns the
+    instance state that affects the output (see docs/design.md, "Two
+    instances, one cache: why ``config=`` is load-bearing").
+
+    Args:
+        version: Key namespace; bump it to invalidate when logic or prompts change.
+        policy: TTL, stale window, and None-handling behavior.
+        operation: Operation name in the key; defaults to the function name.
+        cache: Attribute name (or resolver) for the ``CacheService`` on the instance.
+        cache_attr: Legacy alias for ``cache``; pass at most one of the two.
+        config: Named function taking the instance and returning the dict of
+            output-affecting instance state to include in the key.
+        inputs: Named function overriding input capture.
+        exclude: Argument names to drop from the key (trace ids, timestamps).
+        serialize: Custom serialization for the cached value.
+        deserialize: Custom deserialization for the cached value.
+    """
     if cache_attr is not None:
         if cache != DEFAULT_CACHE:
             raise TypeError("Pass either cache or cache_attr, not both")
