@@ -33,7 +33,7 @@ For the cases where you need to exclude an argument (like `request_id` or `trace
 ## What this library adds
 
 - Async-aware caching (sync and async methods, same API)
-- Persistent backends (disk, extensible to Redis etc.)
+- Persistent backends (disk-backed; the `CacheStore` protocol makes additional backends like Redis straightforward to add)
 - Recursive normalization of non-hashable inputs
 - TTL, stale windows, background refresh
 - Version-aware cache invalidation

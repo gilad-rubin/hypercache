@@ -6,7 +6,7 @@ Async-aware, persistent caching for Python functions and methods.
 
 A caching layer for expensive function calls (API calls, embeddings, LLM generations) that:
 - Works with sync and async functions/methods
-- Persists across process restarts (disk, Redis)
+- Persists across process restarts (disk-backed; the `CacheStore` protocol makes additional backends like Redis straightforward to add)
 - Normalizes non-hashable inputs (dicts, Pydantic models, dataclasses, bytes)
 - Supports TTL, stale windows, and background refresh
 
