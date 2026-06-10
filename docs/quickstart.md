@@ -17,8 +17,10 @@ def _embedder_config(self) -> dict:
 
 
 class Embedder:
+    cache: CacheService | None
+
     def __init__(self, model: str = "text-embedding-3-large"):
-        self._cache = CacheService(MemoryStore())
+        self.cache = CacheService(MemoryStore())
         self.model = model
 
     @cached(config=_embedder_config)
@@ -41,8 +43,10 @@ Works the same way:
 
 ```python
 class AsyncEmbedder:
+    cache: CacheService | None
+
     def __init__(self):
-        self._cache = CacheService(MemoryStore())
+        self.cache = CacheService(MemoryStore())
         self.model = "text-embedding-3-large"
 
     @cached(config=_embedder_config)

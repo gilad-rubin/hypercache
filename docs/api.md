@@ -9,7 +9,7 @@
     version: str,
     policy: CachePolicy,
     operation: str | None = None,       # defaults to function name
-    cache_attr: str = "_cache",         # attribute name for CacheService on self
+    cache: str = "cache",               # attribute name for CacheService on self (declared on the class)
     config: Callable | None = None,     # instance state for key (takes self, returns dict)
     inputs: Callable | None = None,     # override input capture (takes self + args)
     exclude: frozenset[str] | None = None,  # arg names to exclude from key
