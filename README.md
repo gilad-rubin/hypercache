@@ -6,7 +6,7 @@ Explicit, persistent caching for expensive Python functions and methods.
 
 - Caches expensive calls (API calls, embeddings, LLM generations)
 - Works with sync and async methods
-- Persists across restarts (disk, extensible to Redis)
+- Persists across restarts (disk-backed; the `CacheStore` protocol makes additional backends like Redis straightforward to add)
 - Normalizes non-hashable inputs (dicts, Pydantic models, dataclasses, bytes)
 - Supports TTL, stale windows, and background refresh
 
@@ -25,6 +25,13 @@ Explicit, persistent caching for expensive Python functions and methods.
 ```bash
 pip install hypercache
 ```
+
+## Documentation
+
+- [Quickstart](docs/quickstart.md)
+- [Eval loops](docs/eval-loops.md) — make iterative AI-pipeline evaluation affordable: change one parameter, recompute only the affected calls
+- [Design decisions](docs/design.md)
+- [API reference](docs/api.md)
 
 ## Observe cache telemetry
 
@@ -89,6 +96,7 @@ class Embedder:
 
 - **Inputs** are auto-captured from the function signature. No duplicate parameter lists.
 - **`config=`** explicitly declares which instance state affects the cache key. No hidden method lookups.
+  Without it, two instances of the same class produce **identical** keys — see [Two instances, one cache](docs/design.md#two-instances-one-cache-why-config-is-load-bearing).
 - **`version=`** defaults to `"v1"` and lets you invalidate all cached values when the implementation changes.
 - **`policy=`** defaults to `CachePolicy()` when you do not need TTL or stale behavior.
 

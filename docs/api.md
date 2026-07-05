@@ -4,12 +4,16 @@
 
 ### `@cached(...)`
 
+All arguments are keyword-only (note the leading `*`):
+
 ```python
 @cached(
-    version: str,
-    policy: CachePolicy,
+    *,
+    version: str = "v1",                # key namespace; bump to invalidate
+    policy: CachePolicy = CachePolicy(),  # TTL, stale window, None handling
     operation: str | None = None,       # defaults to function name
-    cache_attr: str = "_cache",         # attribute name for CacheService on self
+    cache: str = "cache",               # attribute name for CacheService on self (declared on the class)
+    cache_attr: str | None = None,      # legacy alias for cache; pass at most one
     config: Callable | None = None,     # instance state for key (takes self, returns dict)
     inputs: Callable | None = None,     # override input capture (takes self + args)
     exclude: frozenset[str] | None = None,  # arg names to exclude from key
@@ -17,6 +21,8 @@
     deserialize: Callable | None = None,  # custom deserialization
 )
 ```
+
+Because the signature is keyword-only, `@cached("v1", CachePolicy())` raises `TypeError` — pass `version=` and `policy=` by name.
 
 The decorated method becomes a `CachedMethod` descriptor with helper methods:
 
