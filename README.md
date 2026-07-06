@@ -61,6 +61,43 @@ assert event.operation == "embed"
 The observer is task-local via ``ContextVar``, so nested async calls stay scoped to
 the current request or workflow run.
 
+Each `CacheTelemetry` event carries `hit`, `stale`, `wrote`, and `mode` alongside
+`instance` and `operation` — enough to tell a miss from a hit from a stale-but-served
+read. A miss followed by a hit on the same key looks like this:
+
+```python
+from datetime import timedelta
+from hypercache import CachePolicy, CacheService, MemoryStore, cached, observe_cache
+
+
+def _cfg(self) -> dict:
+    return {"model": self.model}
+
+
+class Embedder:
+    cache: CacheService | None
+
+    def __init__(self):
+        self.cache = CacheService(MemoryStore())
+        self.model = "text-embedding-3-large"
+
+    @cached(config=_cfg, policy=CachePolicy(ttl=timedelta(hours=1)))
+    def embed(self, text: str) -> dict:
+        return {"vector": [1, 2, 3], "text": text}
+
+
+embedder = Embedder()
+events = []
+with observe_cache(events.append):
+    embedder.embed("hello")   # miss: computes and writes
+    embedder.embed("hello")   # hit: served from cache
+
+for e in events:
+    print(f"hit={e.hit} stale={e.stale} wrote={e.wrote} mode={e.mode!r}")
+# hit=False stale=False wrote=True mode='normal'
+# hit=True stale=False wrote=False mode='normal'
+```
+
 ## Basic usage
 
 ```python
@@ -158,24 +195,56 @@ cache = CacheService(DiskCacheStore(Path("./cache")))
 ## Structured return values
 
 For Pydantic-style models and dataclasses, use explicit value codecs so disk
-persistence stores self-describing plain data instead of relying on live Python objects:
+persistence stores self-describing plain data instead of relying on live Python objects.
+`deserialize_structured_value` rebuilds the same model type back, even from a fresh
+`CacheService` that never saw the original class instance construct it — the shape a
+restarted process actually sees:
 
 ```python
+from pathlib import Path
+from pydantic import BaseModel
 from hypercache import (
-    CachePolicy,
+    CacheService,
+    DiskCacheStore,
     cached,
     deserialize_structured_value,
     serialize_structured_value,
 )
 
 
-@cached(
-    version="structured:v1",
-    serialize=serialize_structured_value,
-    deserialize=deserialize_structured_value,
-)
-async def generate_structured(self, prompt: str) -> MyStructuredModel:
-    ...
+class Invoice(BaseModel):
+    number: str
+    total: float
+
+
+class Parser:
+    cache: CacheService | None
+
+    def __init__(self, cache: CacheService):
+        self.cache = cache
+
+    @cached(
+        version="parse:v1",
+        serialize=serialize_structured_value,
+        deserialize=deserialize_structured_value,
+    )
+    def parse(self, document_id: str) -> Invoice:
+        return Invoice(number=document_id, total=42.5)
+
+
+cache_dir = Path("./cache")
+
+# Process 1: compute and cache to disk.
+cache = CacheService(DiskCacheStore(cache_dir))
+result = Parser(cache).parse("INV-001")
+
+# Process 2 (a fresh CacheService over the same directory — no live Python
+# objects carried over, the same shape a process restart produces):
+cache_restarted = CacheService(DiskCacheStore(cache_dir))
+result_restarted = Parser(cache_restarted).parse("INV-001")
+
+assert isinstance(result_restarted, Invoice)
+assert result_restarted == result
 ```
 
 ## Direct usage (no decorator)
