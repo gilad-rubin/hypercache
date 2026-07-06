@@ -61,7 +61,8 @@ class DiskCacheStore:
             import diskcache as dc
         except ModuleNotFoundError as exc:  # pragma: no cover
             raise ModuleNotFoundError(
-                "DiskCacheStore requires `diskcache`. Install hypercache[diskcache]."
+                "DiskCacheStore requires `diskcache`. Install it with `pip install diskcache` "
+                "(a base dependency of hypercache; a missing module means a broken install)."
             ) from exc
         self._cache = dc.Cache(str(cache_dir))
 
