@@ -194,14 +194,17 @@ cache = CacheService(DiskCacheStore(Path("./cache")))
 
 ## Structured return values
 
-For Pydantic-style models and dataclasses, use explicit value codecs so disk
+For Pydantic-style models and dataclasses (`pip install "hypercache[pydantic]"` — pydantic
+is the optional extra this snippet needs), use explicit value codecs so disk
 persistence stores self-describing plain data instead of relying on live Python objects.
 `deserialize_structured_value` rebuilds the same model type back, even from a fresh
 `CacheService` that never saw the original class instance construct it — the shape a
 restarted process actually sees:
 
 ```python
+import tempfile
 from pathlib import Path
+
 from pydantic import BaseModel
 from hypercache import (
     CacheService,
@@ -232,7 +235,7 @@ class Parser:
         return Invoice(number=document_id, total=42.5)
 
 
-cache_dir = Path("./cache")
+cache_dir = Path(tempfile.mkdtemp())  # throwaway dir: the demo is self-contained on every run
 
 # Process 1: compute and cache to disk.
 cache = CacheService(DiskCacheStore(cache_dir))
