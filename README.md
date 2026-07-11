@@ -61,9 +61,11 @@ assert event.operation == "embed"
 The observer is task-local via ``ContextVar``, so nested async calls stay scoped to
 the current request or workflow run.
 
-Each `CacheTelemetry` event carries `hit`, `stale`, `wrote`, and `mode` alongside
+Each `CacheTelemetry` event carries `hit`, `stale`, `wrote`, `shared`, and `mode` alongside
 `instance` and `operation` — enough to tell a miss from a hit from a stale-but-served
-read. A miss followed by a hit on the same key looks like this:
+read. `shared=True` means the caller joined an in-process single-flight computation
+instead of running the expensive function itself. A miss followed by a hit on the same
+key looks like this:
 
 ```python
 from datetime import timedelta
@@ -194,9 +196,10 @@ cache = CacheService(DiskCacheStore(Path("./cache")))
 
 ## Structured return values
 
-For Pydantic-style models and dataclasses (`pip install "hypercache[pydantic]"` — pydantic
-is the optional extra this snippet needs), use explicit value codecs so disk
-persistence stores self-describing plain data instead of relying on live Python objects.
+For Pydantic-style models and dataclasses (`pip install "hypercache[pydantic]"` — Pydantic
+is the optional extra this snippet needs), use `structured=True` so disk persistence
+stores self-describing plain data instead of relying on live Python objects. The same
+mode handles nested root containers such as `list[Invoice]`.
 `deserialize_structured_value` rebuilds the same model type back, even from a fresh
 `CacheService` that never saw the original class instance construct it — the shape a
 restarted process actually sees:
@@ -210,8 +213,6 @@ from hypercache import (
     CacheService,
     DiskCacheStore,
     cached,
-    deserialize_structured_value,
-    serialize_structured_value,
 )
 
 
@@ -228,8 +229,7 @@ class Parser:
 
     @cached(
         version="parse:v1",
-        serialize=serialize_structured_value,
-        deserialize=deserialize_structured_value,
+        structured=True,
     )
     def parse(self, document_id: str) -> Invoice:
         return Invoice(number=document_id, total=42.5)
@@ -267,10 +267,20 @@ result = cache.run(
 ## Invalidation
 
 ```python
+embedder = Embedder()
+
 Embedder.embed.key_for(embedder, "hello")     # inspect key
 Embedder.embed.invalidate(embedder, "hello")   # delete one entry
 Embedder.embed.clear(embedder)                 # delete all entries for this method
 ```
+
+## Production notes
+
+- **Thread safety**: `MemoryStore` serializes access on a lock (background refreshes write from daemon threads); `DiskCacheStore` is safe across threads and processes.
+- **Cache failures never lose a successful result**: serialization and store-write failures are logged; the caller still gets the computed value. Store-read failures are treated as misses.
+- **Bad entries recover**: a failed background refresh logs and keeps serving the stale value; an entry that fails to deserialize is evicted and recomputed.
+- **In-process single-flight**: concurrent sync threads or async tasks missing the same key share one computation. `BYPASS` calls remain independent. Coordination is per `CacheService`, not distributed across processes.
+- **Typed keys**: equal-looking values of different types (`Path("x")` and `"x"`, tuple and list, UUID and string) key separately. Version 0.3 uses a new injective key schema, so 0.2.x entries cold-miss once after upgrade.
 
 ## Design principles
 

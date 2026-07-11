@@ -1,4 +1,4 @@
-from .core import CacheControl
+from .core import use_cache_mode
 from .decorators import CachedMethod, cached
 from .observer import CacheObserver, CacheTelemetry, observe_cache
 from .service import CacheService
@@ -8,7 +8,6 @@ from .types import CacheEntry, CacheKey, CacheMode, CachePolicy, CacheResult
 
 __all__ = [
     "CacheObserver",
-    "CacheControl",
     "CacheEntry",
     "CacheKey",
     "CacheMode",
@@ -24,4 +23,5 @@ __all__ = [
     "deserialize_structured_value",
     "observe_cache",
     "serialize_structured_value",
+    "use_cache_mode",
 ]

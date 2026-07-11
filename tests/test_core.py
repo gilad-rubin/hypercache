@@ -499,6 +499,7 @@ def test_async_cached_refreshes_in_background():
 
 def test_cached_decorator_requires_declared_cache_attribute():
     with pytest.raises((RuntimeError, TypeError)) as exc_info:
+
         class BadService:
             @cached(version="answer:v1", policy=CachePolicy())
             def answer(self, prompt: str):

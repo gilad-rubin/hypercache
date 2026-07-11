@@ -65,6 +65,25 @@ The decorator inspects the function signature and captures all arguments automat
 
 For the cases where you need to exclude an argument (like `request_id` or `trace_id`), use `exclude=`. For full control, use `inputs=`.
 
+## Why structured caching is explicit
+
+Dataclass and Pydantic values need a self-describing representation to survive a process
+restart without relying on a live Python object. Hypercache does not silently serialize
+every return value: `structured=True` is visible at the decorator, while plain methods
+retain their existing store representation. Custom `serialize=` / `deserialize=` callables
+remain the escape hatch and cannot be combined with structured mode.
+
+## Why single-flight lives in CacheService
+
+The service owns read, compute, and write orchestration, so it is the only layer that can
+coalesce both decorator calls and direct `run` / `arun` calls without duplicating policy.
+Flights are keyed per service and cache key, cover sync and async misses, propagate the
+leader's value or exception, and release ownership before a retry. `BYPASS` opts out.
+
+This is deliberately not a distributed lock. Cross-process coordination belongs to a
+store-specific capability; pretending an in-memory lock covers multiple workers would be
+more dangerous than documenting the boundary.
+
 ## Why not `functools.lru_cache`
 
 - `lru_cache` requires all arguments to be hashable — dicts, lists, Pydantic models fail
@@ -86,3 +105,4 @@ For the cases where you need to exclude an argument (like `request_id` or `trace
 - Recursive normalization of non-hashable inputs
 - TTL, stale windows, background refresh
 - Version-aware cache invalidation
+- In-process single-flight for concurrent same-key misses

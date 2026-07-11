@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ class CacheTelemetry:
         stale: True if the cached value was past its stale window.
         refreshing: True if a background refresh was triggered.
         wrote: True if a new value was written to the cache store.
+        shared: True if this caller joined an in-process single-flight compute.
         mode: The cache mode in effect: "normal" | "bypass" | "refresh_forced".
         instance: Qualified instance name used in the cache key payload.
         operation: The method or operation name.
@@ -36,6 +37,7 @@ class CacheTelemetry:
     mode: str
     instance: str
     operation: str
+    shared: bool = False
 
 
 CacheObserver = Callable[[CacheTelemetry], None]
@@ -46,14 +48,14 @@ __all__ = ["CacheObserver", "CacheTelemetry", "observe_cache"]
 _observer: ContextVar[CacheObserver | None] = ContextVar("hypercache_observer", default=None)
 
 
-def _set_observer(fn: CacheObserver) -> object:
+def _set_observer(fn: CacheObserver) -> Token[CacheObserver | None]:
     """Install an observer for the current thread or async task."""
     return _observer.set(fn)
 
 
-def _reset_observer(token: object) -> None:
+def _reset_observer(token: Token[CacheObserver | None]) -> None:
     """Restore the previous observer state."""
-    _observer.reset(token)  # type: ignore[arg-type]
+    _observer.reset(token)
 
 
 @contextmanager

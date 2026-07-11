@@ -5,28 +5,16 @@ from functools import wraps
 from inspect import iscoroutinefunction, signature
 from typing import Any, Optional, Union
 
+from .core import _current_cache_mode
 from .keys import build_key
 from .service import CacheService
-from .types import CacheMode, CachePolicy
+from .structured import deserialize_structured_value, serialize_structured_value
+from .types import CachePolicy
 
 CacheResolver = Union[str, Callable[[Any], Optional[CacheService]]]
 DEFAULT_CACHE = "cache"
 DEFAULT_VERSION = "v1"
 DEFAULT_POLICY = CachePolicy()
-
-
-def build_inputs(
-    method: Callable[..., Any],
-    instance: Any,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    custom: Callable[..., dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    if custom is not None:
-        return custom(instance, *args, **kwargs)
-    bound = signature(method).bind(instance, *args, **kwargs)
-    bound.apply_defaults()
-    return {name: value for name, value in bound.arguments.items() if name != "self"}
 
 
 def _resolve_config(
@@ -64,17 +52,48 @@ class CachedMethod:
         self.serialize = serialize
         self.deserialize = deserialize
         self.is_async = iscoroutinefunction(func)
+        self._qualified_name = getattr(func, "__qualname__", type(func).__qualname__)
+        self._signature = signature(func)
+        parameters = list(self._signature.parameters)
+        if not parameters:
+            raise TypeError(
+                f"@cached requires an instance method; {self._qualified_name} takes no arguments."
+            )
+        self._self_param = parameters[0]
+        if exclude and inputs is None:
+            unknown = exclude - set(parameters[1:])
+            if unknown:
+                raise TypeError(
+                    f"@cached exclude= names not in {self._qualified_name}'s signature: "
+                    f"{sorted(unknown)}"
+                )
+        self._name: str | None = None
         wraps(func)(self)
 
     def __set_name__(self, owner: type, name: str) -> None:
+        self._name = name
         if isinstance(self.cache, str) and not _owner_declares_attribute(owner, self.cache):
             raise TypeError(
                 f"{owner.__qualname__}.{name} uses @cached(cache={self.cache!r}) but "
                 f"{owner.__qualname__} does not declare `{self.cache}: CacheService | None`."
             )
 
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        raise TypeError(
+            f"@cached decorates instance methods, but {self._qualified_name} is being "
+            "called as a plain function (module-level functions never trigger the "
+            "descriptor protocol). Wrap it in a class holding the CacheService."
+        )
+
     def _build_inputs(self, instance: Any, args: tuple, kwargs: dict) -> dict[str, Any]:
-        raw = build_inputs(self.func, instance, args, kwargs, self.inputs_fn)
+        if self.inputs_fn is not None:
+            raw = self.inputs_fn(instance, *args, **kwargs)
+        else:
+            bound = self._signature.bind(instance, *args, **kwargs)
+            bound.apply_defaults()
+            raw = {
+                name: value for name, value in bound.arguments.items() if name != self._self_param
+            }
         if self.exclude:
             return {k: v for k, v in raw.items() if k not in self.exclude}
         return raw
@@ -95,27 +114,39 @@ class CachedMethod:
     def __get__(self, instance: Any, owner: type | None = None) -> Any:
         if instance is None:
             return self
+        bound = self._make_bound(instance)
+        if self._name is not None:
+            try:
+                # CachedMethod is a non-data descriptor, so the instance dict
+                # takes precedence on the next lookup: the wrapper is built once
+                # per instance instead of on every attribute access.
+                instance.__dict__[self._name] = bound
+            except (AttributeError, TypeError):
+                pass  # __slots__ instances fall back to a wrapper per access
+        return bound
 
-        cache = self._resolve_cache(instance)
-        if cache is None:
-            return self.func.__get__(instance, owner)
-
+    def _make_bound(self, instance: Any) -> Callable[..., Any]:
         if self.is_async:
 
             @wraps(self.func)
             async def bound(*args: Any, **kwargs: Any):
-                mode = _extract_mode(kwargs)
-                inputs = self._build_inputs(instance, args, kwargs)
-                config = _resolve_config(self.config, instance)
+                mode = _current_cache_mode()
+                cache = self._resolve_cache(instance)
+                if cache is None:
+                    return await self.func(instance, *args, **kwargs)
+
+                def compute():
+                    return self.func(instance, *args, **kwargs)
+
                 result = await cache.arun(
                     instance=instance,
                     operation=self.operation,
                     version=self.version,
-                    inputs=inputs,
-                    config=config,
+                    inputs=self._build_inputs(instance, args, kwargs),
+                    config=_resolve_config(self.config, instance),
                     policy=self.policy,
                     mode=mode,
-                    compute=lambda: self.func(instance, *args, **kwargs),
+                    compute=compute,
                     serialize=self.serialize,
                     deserialize=self.deserialize,
                 )
@@ -125,25 +156,28 @@ class CachedMethod:
 
             @wraps(self.func)
             def bound(*args: Any, **kwargs: Any):
-                mode = _extract_mode(kwargs)
-                inputs = self._build_inputs(instance, args, kwargs)
-                config = _resolve_config(self.config, instance)
+                mode = _current_cache_mode()
+                cache = self._resolve_cache(instance)
+                if cache is None:
+                    return self.func(instance, *args, **kwargs)
+
+                def compute():
+                    return self.func(instance, *args, **kwargs)
+
                 result = cache.run(
                     instance=instance,
                     operation=self.operation,
                     version=self.version,
-                    inputs=inputs,
-                    config=config,
+                    inputs=self._build_inputs(instance, args, kwargs),
+                    config=_resolve_config(self.config, instance),
                     policy=self.policy,
                     mode=mode,
-                    compute=lambda: self.func(instance, *args, **kwargs),
+                    compute=compute,
                     serialize=self.serialize,
                     deserialize=self.deserialize,
                 )
                 return result.value
 
-        bound._cache_descriptor = self
-        bound._cache_instance = instance
         return bound
 
     def key_for(self, instance: Any, *args: Any, **kwargs: Any) -> str:
@@ -202,6 +236,7 @@ def cached(
     exclude: frozenset[str] | None = None,
     serialize: Callable[[Any], Any] | None = None,
     deserialize: Callable[[Any], Any] | None = None,
+    structured: bool = False,
 ) -> Callable[[Callable[..., Any]], CachedMethod]:
     """Cache a method's return value, keyed on its captured inputs.
 
@@ -224,18 +259,41 @@ def cached(
         exclude: Argument names to drop from the key (trace ids, timestamps).
         serialize: Custom serialization for the cached value.
         deserialize: Custom deserialization for the cached value.
+        structured: Use hypercache's JSON-safe dataclass/Pydantic codec, including
+            for nested root containers. Mutually exclusive with custom codecs.
     """
+    if structured and (serialize is not None or deserialize is not None):
+        raise TypeError(
+            "structured=True selects hypercache's codec; do not also pass "
+            "serialize= or deserialize=."
+        )
+    if structured:
+        serialize = serialize_structured_value
+        deserialize = deserialize_structured_value
+
     if cache_attr is not None:
         if cache != DEFAULT_CACHE:
             raise TypeError("Pass either cache or cache_attr, not both")
         cache = cache_attr
 
     def decorator(func: Callable[..., Any]) -> CachedMethod:
+        qualified_name = getattr(func, "__qualname__", "")
+        owner_name = qualified_name.rpartition(".")[0].rpartition(".")[2]
+        if "." not in qualified_name or owner_name == "<locals>":
+            raise TypeError(
+                "@cached supports instance methods only; it cannot decorate a "
+                f"module-level function ({qualified_name or type(func).__name__})."
+            )
+        if isinstance(func, (staticmethod, classmethod)):
+            raise TypeError(
+                "@cached supports instance methods only; it cannot wrap "
+                f"@{type(func).__name__} (the cache lives on the instance)."
+            )
         return CachedMethod(
             func,
             version=version,
             policy=policy,
-            operation=operation or func.__name__,
+            operation=operation or getattr(func, "__name__", type(func).__name__),
             cache=cache,
             config=config,
             inputs=inputs,
@@ -245,26 +303,6 @@ def cached(
         )
 
     return decorator
-
-
-def _extract_mode(kwargs: dict[str, Any]) -> CacheMode:
-    explicit = kwargs.pop("_cache_mode", None)
-    if explicit is not None:
-        if not isinstance(explicit, CacheMode):
-            raise TypeError("_cache_mode must be a CacheMode")
-        return explicit
-
-    cache_control = kwargs.pop("__cache_control__", None)
-    if cache_control is not None:
-        return cache_control.to_mode()
-
-    skip_cache = kwargs.pop("hypercache__skip_cache", False)
-    refresh_cache = kwargs.pop("hypercache__refresh_cache", False)
-    if skip_cache:
-        return CacheMode.BYPASS
-    if refresh_cache:
-        return CacheMode.REFRESH
-    return CacheMode.NORMAL
 
 
 def _owner_declares_attribute(owner: type, attr: str) -> bool:

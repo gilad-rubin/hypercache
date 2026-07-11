@@ -102,12 +102,13 @@ def generate(self, question: str, context: str, trace_id: str, run_started_at: s
 
 ## Force recomputation with `CacheMode.REFRESH`
 
-To deliberately re-pay for a call — the provider changed behavior, or an entry looks suspect — pass `_cache_mode` on the call:
+To deliberately re-pay for a call — the provider changed behavior, or an entry looks suspect — scope that call with `use_cache_mode`:
 
 ```python
-from hypercache import CacheMode
+from hypercache import CacheMode, use_cache_mode
 
-answer = generator.generate(case.question, context, _cache_mode=CacheMode.REFRESH)
+with use_cache_mode(CacheMode.REFRESH):
+    answer = generator.generate(case.question, context)
 ```
 
 `REFRESH` recomputes and overwrites the stored entry; `BYPASS` skips the cache without writing.
@@ -126,8 +127,12 @@ with observe_cache(events.append):
 hits = sum(1 for event in events if event.hit)
 print(f"{hits}/{len(events)} cache hits")
 for operation in {event.operation for event in events}:
-    misses = [e for e in events if e.operation == operation and not e.hit]
-    print(f"  {operation}: {len(misses)} computed")
+    computed = [e for e in events if e.operation == operation and not e.hit and not e.shared]
+    print(f"  {operation}: {len(computed)} computed")
 ```
 
 After changing only the generator's temperature, expect `embed: 0 computed` and `generate: 30 computed`. Anything else means key churn — usually incidental context that belongs in `exclude=`, or output-affecting state missing from `config=`.
+
+If multiple tasks request the same cold case concurrently, the service single-flights that
+key: one call computes and the other telemetry events have `shared=True`. Separate worker
+processes do not share this in-memory coordination.

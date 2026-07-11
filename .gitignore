@@ -1,5 +1,8 @@
 .agent-repl/
 .pytest_cache/
+.ruff_cache/
 .venv/
 __pycache__/
 *.pyc
+/cache/
+/dist/

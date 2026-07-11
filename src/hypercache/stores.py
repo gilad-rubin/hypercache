@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from collections.abc import Iterator
 from datetime import timedelta
@@ -24,32 +25,42 @@ class CacheStore(Protocol):
 
 
 class MemoryStore:
+    """In-memory LRU store. Thread-safe: background refreshes write from
+    daemon threads, so every access serializes on one lock."""
+
     def __init__(self, *, max_entries: int = 1024) -> None:
         self._data: OrderedDict[str, CacheEntry] = OrderedDict()
         self._max_entries = max_entries
+        self._lock = threading.Lock()
 
     def get(self, key: str) -> CacheEntry | None:
-        entry = self._data.get(key)
-        if entry is None:
-            return None
-        self._data.move_to_end(key)
-        return entry
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            self._data.move_to_end(key)
+            return entry
 
     def set(self, key: str, entry: CacheEntry, ttl: timedelta | None = None) -> None:
         del ttl
-        self._data[key] = entry
-        self._data.move_to_end(key)
-        while len(self._data) > self._max_entries:
-            self._data.popitem(last=False)
+        with self._lock:
+            self._data[key] = entry
+            self._data.move_to_end(key)
+            while len(self._data) > self._max_entries:
+                self._data.popitem(last=False)
 
     def delete(self, key: str) -> None:
-        self._data.pop(key, None)
+        with self._lock:
+            self._data.pop(key, None)
 
     def clear(self) -> None:
-        self._data.clear()
+        with self._lock:
+            self._data.clear()
 
     def items(self) -> Iterator[tuple[str, CacheEntry]]:
-        yield from self._data.items()
+        with self._lock:
+            snapshot = list(self._data.items())
+        yield from snapshot
 
     def close(self) -> None:
         return None

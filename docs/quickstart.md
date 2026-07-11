@@ -64,3 +64,16 @@ cache = CacheService(DiskCacheStore(Path("./cache")))
 ```
 
 Swap `MemoryStore` for `DiskCacheStore` — everything else stays the same.
+
+## Structured results
+
+Opt in once at the decorator for dataclasses, Pydantic models, and nested containers:
+
+```python
+@cached(config=_embedder_config, structured=True)
+def load_documents(self, collection: str) -> list[Document]:
+    return fetch_documents(collection)
+```
+
+The stored value is JSON-safe and self-describing. The model class must be importable
+from its recorded module, and cache data must be trusted when deserializing it.

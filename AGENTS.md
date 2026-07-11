@@ -48,12 +48,13 @@ A caching layer for expensive function calls (API calls, embeddings, LLM generat
     config=_embedder_config,      # optional: instance state for key
     inputs=_custom_inputs,         # optional: override input capture
     exclude=frozenset({"trace_id"}),  # optional: exclude args from key
+    structured=True,               # optional: JSON-safe dataclass/Pydantic values
 )
 ```
 
 ## Architecture
 
-- `CacheService`: orchestrates read/compute/write
+- `CacheService`: orchestrates read/compute/write and in-process single-flight
 - `CachePolicy`: TTL, stale window, None handling
 - `CacheMode`: per-call override (normal/bypass/refresh)
 - `MemoryStore` / `DiskCacheStore`: storage backends (protocol-based)
@@ -71,5 +72,8 @@ src/hypercache/
   stores.py        # CacheStore protocol, MemoryStore, DiskCacheStore
   service.py       # CacheService (orchestration)
   decorators.py    # @cached decorator, CachedMethod descriptor
-  core.py          # legacy helpers (cached_call, cached_method, etc.)
+  structured.py    # self-describing codec for dataclass/Pydantic return values
+  observer.py      # observe_cache, CacheTelemetry (scoped telemetry)
+  _observer.py     # import-compat shim for pre-0.2.1 hypercache._observer users
+  core.py          # scoped per-call CacheMode override
 ```
