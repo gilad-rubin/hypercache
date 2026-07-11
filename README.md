@@ -279,7 +279,8 @@ Embedder.embed.clear(embedder)                 # delete all entries for this met
 - **Thread safety**: `MemoryStore` serializes access on a lock (background refreshes write from daemon threads); `DiskCacheStore` is safe across threads and processes.
 - **Cache failures never lose a successful result**: serialization and store-write failures are logged; the caller still gets the computed value. Store-read failures are treated as misses.
 - **Bad entries recover**: a failed background refresh logs and keeps serving the stale value; an entry that fails to deserialize is evicted and recomputed.
-- **In-process single-flight**: concurrent sync threads or async tasks missing the same key share one computation. `BYPASS` calls remain independent. Coordination is per `CacheService`, not distributed across processes.
+- **In-process single-flight**: concurrent sync threads or async tasks missing the same key share one computation. A forced refresh waits behind normal work and then recomputes once, so it is never mistaken for a normal result. `BYPASS` calls remain independent. Coordination is per `CacheService`, not distributed across processes.
+- **Safe shutdown**: call `close()` only after foreground calls and background refreshes finish. It raises `RuntimeError` rather than closing a store out from under active work.
 - **Typed keys**: equal-looking values of different types (`Path("x")` and `"x"`, tuple and list, UUID and string) key separately. Version 0.3 uses a new injective key schema, so 0.2.x entries cold-miss once after upgrade.
 
 ## Design principles

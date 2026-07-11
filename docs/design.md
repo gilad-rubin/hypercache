@@ -78,7 +78,9 @@ remain the escape hatch and cannot be combined with structured mode.
 The service owns read, compute, and write orchestration, so it is the only layer that can
 coalesce both decorator calls and direct `run` / `arun` calls without duplicating policy.
 Flights are keyed per service and cache key, cover sync and async misses, propagate the
-leader's value or exception, and release ownership before a retry. `BYPASS` opts out.
+leader's value or exception, and release ownership before a retry. A forced refresh that
+arrives behind normal work waits and then owns a new refresh flight, preserving the
+promise that `REFRESH` recomputes. `BYPASS` opts out.
 
 This is deliberately not a distributed lock. Cross-process coordination belongs to a
 store-specific capability; pretending an in-memory lock covers multiple workers would be

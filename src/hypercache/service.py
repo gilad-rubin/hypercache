@@ -28,6 +28,13 @@ _active_flight_keys: ContextVar[frozenset[str]] = ContextVar(
 class _Flight:
     future: Future[CacheResult]
     is_leader: bool
+    refresh_after: bool = False
+
+
+@dataclass(frozen=True)
+class _ActiveFlight:
+    future: Future[CacheResult]
+    mode: CacheMode
 
 
 class CacheService:
@@ -38,8 +45,9 @@ class CacheService:
         # The event loop holds only weak refs to tasks; without this set a
         # background refresh task can be garbage-collected mid-flight.
         self._refresh_tasks: set[asyncio.Task[None]] = set()
-        self._flights: dict[str, Future[CacheResult]] = {}
+        self._flights: dict[str, _ActiveFlight] = {}
         self._flight_lock = threading.Lock()
+        self._closed = False
 
     @classmethod
     def memory(cls, *, max_entries: int = 1024) -> CacheService:
@@ -138,7 +146,15 @@ class CacheService:
         return len(keys_to_delete)
 
     def close(self) -> None:
-        self._store.close()
+        with self._flight_lock, self._refresh_lock:
+            if self._closed:
+                return
+            if self._flights or self._refreshing:
+                raise RuntimeError(
+                    "Cannot close CacheService while cache computations or refreshes are active."
+                )
+            self._closed = True
+            self._store.close()
 
     def run(
         self,
@@ -154,6 +170,7 @@ class CacheService:
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
+        self._ensure_open()
         request = build_key(
             instance=instance,
             operation=operation,
@@ -190,8 +207,24 @@ class CacheService:
                 mode=mode,
                 operation=operation,
             )
-        if not prepared.is_leader:
-            return self._complete_shared(prepared.future.result(), mode=mode, operation=operation)
+        while not prepared.is_leader:
+            if not prepared.refresh_after:
+                return self._complete_shared(
+                    prepared.future.result(), mode=mode, operation=operation
+                )
+            try:
+                prepared.future.result()
+            except Exception:
+                pass
+            prepared = self._prepare_call(
+                request=request,
+                policy=policy,
+                mode=mode,
+                deserialize=deserialize,
+                operation=operation,
+                start_refresh=start_refresh,
+            )
+            assert isinstance(prepared, _Flight)
         return self._run_leader(
             request,
             prepared.future,
@@ -218,6 +251,7 @@ class CacheService:
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
+        self._ensure_open()
         request = build_key(
             instance=instance,
             operation=operation,
@@ -254,9 +288,23 @@ class CacheService:
                 mode=mode,
                 operation=operation,
             )
-        if not prepared.is_leader:
-            result = await self._await_flight(prepared.future)
-            return self._complete_shared(result, mode=mode, operation=operation)
+        while not prepared.is_leader:
+            if not prepared.refresh_after:
+                result = await self._await_flight(prepared.future)
+                return self._complete_shared(result, mode=mode, operation=operation)
+            try:
+                await self._await_flight(prepared.future)
+            except Exception:
+                pass
+            prepared = self._prepare_call(
+                request=request,
+                policy=policy,
+                mode=mode,
+                deserialize=deserialize,
+                operation=operation,
+                start_refresh=start_refresh,
+            )
+            assert isinstance(prepared, _Flight)
         return await self._arun_leader(
             request,
             prepared.future,
@@ -291,8 +339,7 @@ class CacheService:
             return cached
         if mode is CacheMode.BYPASS:
             return None
-        flight, is_leader = self._begin_flight(request.key)
-        return _Flight(future=flight, is_leader=is_leader)
+        return self._begin_flight(request.key, mode)
 
     def _run_leader(
         self,
@@ -403,19 +450,30 @@ class CacheService:
         finally:
             _active_flight_keys.reset(active_token)
 
-    def _begin_flight(self, key: str) -> tuple[Future[CacheResult], bool]:
+    def _ensure_open(self) -> None:
         with self._flight_lock:
-            flight = self._flights.get(key)
-            if flight is not None:
+            if self._closed:
+                raise RuntimeError("CacheService is closed.")
+
+    def _begin_flight(self, key: str, mode: CacheMode) -> _Flight:
+        with self._flight_lock:
+            if self._closed:
+                raise RuntimeError("CacheService is closed.")
+            active = self._flights.get(key)
+            if active is not None:
                 if key in _active_flight_keys.get():
                     raise RuntimeError(
                         "A cache computation requested the same cache key recursively; "
                         "joining its own single-flight would deadlock."
                     )
-                return flight, False
+                return _Flight(
+                    future=active.future,
+                    is_leader=False,
+                    refresh_after=mode is CacheMode.REFRESH and active.mode is CacheMode.NORMAL,
+                )
             flight = Future()
-            self._flights[key] = flight
-            return flight, True
+            self._flights[key] = _ActiveFlight(future=flight, mode=mode)
+            return _Flight(future=flight, is_leader=True)
 
     async def _await_flight(self, flight: Future[CacheResult]) -> CacheResult:
         wrapped = asyncio.wrap_future(flight)
@@ -436,7 +494,9 @@ class CacheService:
     ) -> None:
         with self._flight_lock:
             flight.set_result(result)
-            self._flights.pop(key, None)
+            active = self._flights.get(key)
+            if active is not None and active.future is flight:
+                self._flights.pop(key)
 
     def _fail_flight(
         self,
@@ -446,7 +506,9 @@ class CacheService:
     ) -> None:
         with self._flight_lock:
             flight.set_exception(error)
-            self._flights.pop(key, None)
+            active = self._flights.get(key)
+            if active is not None and active.future is flight:
+                self._flights.pop(key)
 
     def _complete_shared(
         self,

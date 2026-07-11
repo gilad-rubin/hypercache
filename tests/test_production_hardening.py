@@ -137,6 +137,81 @@ def test_sync_misses_for_one_key_compute_once():
     assert values == ["shared"] * 8
 
 
+def test_refresh_waits_for_normal_flight_then_recomputes():
+    cache = CacheService(MemoryStore())
+    anchor = Anchor()
+    normal_started = threading.Event()
+    release_normal = threading.Event()
+    refresh_entered = threading.Event()
+    refresh_started = threading.Event()
+    results: dict[str, str] = {}
+
+    def compute_normal() -> str:
+        normal_started.set()
+        assert release_normal.wait(timeout=2)
+        return "normal"
+
+    def compute_refresh() -> str:
+        refresh_started.set()
+        return "refreshed"
+
+    def run_normal() -> None:
+        results["normal"] = _run(cache, anchor, compute_normal, x=1).value
+
+    def run_refresh() -> None:
+        refresh_entered.set()
+        results["refresh"] = _run(
+            cache,
+            anchor,
+            compute_refresh,
+            mode=CacheMode.REFRESH,
+            x=1,
+        ).value
+
+    normal = threading.Thread(target=run_normal)
+    refresh = threading.Thread(target=run_refresh)
+    normal.start()
+    assert normal_started.wait(timeout=1)
+    refresh.start()
+    assert refresh_entered.wait(timeout=1)
+    time.sleep(0.02)
+    assert not refresh_started.is_set()
+
+    release_normal.set()
+    normal.join(timeout=2)
+    refresh.join(timeout=2)
+
+    assert results == {"normal": "normal", "refresh": "refreshed"}
+    assert refresh_started.is_set()
+    assert _run(cache, anchor, lambda: "unexpected", x=1).value == "refreshed"
+
+
+def test_close_refuses_to_detach_an_active_flight():
+    cache = CacheService(MemoryStore())
+    anchor = Anchor()
+    started = threading.Event()
+    release = threading.Event()
+
+    def compute() -> str:
+        started.set()
+        assert release.wait(timeout=2)
+        return "done"
+
+    worker = threading.Thread(target=lambda: _run(cache, anchor, compute, x=1))
+    worker.start()
+    assert started.wait(timeout=1)
+
+    with pytest.raises(RuntimeError, match="active"):
+        cache.close()
+
+    release.set()
+    worker.join(timeout=2)
+    cache.close()
+    cache.close()  # idempotent
+    with pytest.raises(RuntimeError, match="closed"):
+        _run(cache, anchor, lambda: "too late", x=2)
+
+
 def test_async_misses_for_one_key_compute_once_and_retry_after_failure():
     async def scenario() -> None:
         cache = CacheService(MemoryStore())
@@ -179,6 +254,58 @@ def test_async_misses_for_one_key_compute_once_and_retry_after_failure():
             compute=lambda: _async_value("recovered"),
         )
         assert retry.value == "recovered"
+
+    asyncio.run(scenario())
+
+
+def test_async_refresh_waits_for_normal_flight_then_recomputes():
+    async def scenario() -> None:
+        cache = CacheService(MemoryStore())
+        anchor = Anchor()
+        normal_started = asyncio.Event()
+        release_normal = asyncio.Event()
+        refresh_started = asyncio.Event()
+
+        async def compute_normal() -> str:
+            normal_started.set()
+            await release_normal.wait()
+            return "normal"
+
+        async def compute_refresh() -> str:
+            refresh_started.set()
+            return "refreshed"
+
+        normal = asyncio.create_task(
+            cache.arun(
+                instance=anchor,
+                operation="op",
+                version="v1",
+                inputs={"x": 1},
+                policy=CachePolicy(),
+                compute=compute_normal,
+            )
+        )
+        await normal_started.wait()
+        refresh = asyncio.create_task(
+            cache.arun(
+                instance=anchor,
+                operation="op",
+                version="v1",
+                inputs={"x": 1},
+                policy=CachePolicy(),
+                mode=CacheMode.REFRESH,
+                compute=compute_refresh,
+            )
+        )
+        await asyncio.sleep(0)
+        assert not refresh_started.is_set()
+
+        release_normal.set()
+        normal_result, refresh_result = await asyncio.gather(normal, refresh)
+
+        assert normal_result.value == "normal"
+        assert refresh_result.value == "refreshed"
+        assert refresh_started.is_set()
 
     asyncio.run(scenario())
 
@@ -354,8 +481,12 @@ def test_background_refresh_task_is_strongly_referenced():
     policy = CachePolicy(stale=timedelta(milliseconds=1), refresh_in_background=True)
 
     async def scenario():
+        refresh_started = asyncio.Event()
+        release_refresh = asyncio.Event()
+
         async def compute():
-            await asyncio.sleep(0.01)
+            refresh_started.set()
+            await release_refresh.wait()
             return "fresh"
 
         cache.run(
@@ -376,16 +507,22 @@ def test_background_refresh_task_is_strongly_referenced():
             compute=compute,
         )
         assert stale.is_refreshing
-        await asyncio.sleep(0.05)
+        await refresh_started.wait()
+        with pytest.raises(RuntimeError, match="active"):
+            cache.close()
+
+        release_refresh.set()
+        await asyncio.sleep(0.01)
         fresh = await cache.arun(
             instance=anchor,
             operation="op",
             version="v1",
             inputs={"x": 1},
-            policy=policy,
+            policy=CachePolicy(),
             compute=compute,
         )
         assert fresh.value == "fresh"
+        cache.close()
 
     asyncio.run(scenario())
 

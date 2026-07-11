@@ -69,7 +69,7 @@ cache = CacheService.disk(path)      # convenience: disk-backed
 | `run(...)` | Sync compute-or-cache, returns `CacheResult` |
 | `arun(...)` | Async compute-or-cache, returns `CacheResult` |
 | `make_key(payload)` | Static: deterministic key for a payload dict |
-| `close()` | Close the underlying store |
+| `close()` | Close the underlying store; raises `RuntimeError` while computations or background refreshes are active |
 
 `run`/`arun` accept `instance=` as an object (keyed by `module.qualname` of its class) or as a plain string used literally as the instance name — the same value `delete_matching(instance=...)` matches against.
 
@@ -112,11 +112,14 @@ Background refresh runs sync methods in a daemon thread and async methods as an
 event-loop task (the service holds a strong reference until it finishes). A
 refresh failure is logged and the stale value keeps being served.
 
-Normal and forced-refresh misses are single-flighted per `CacheService` and cache key:
-concurrent sync threads and async tasks share one computation. `BYPASS` deliberately
-does not join a flight. This coordination is in-process; separate services or processes
-can still compute the same key concurrently. A computation that recursively requests its
-own key raises `RuntimeError` instead of deadlocking; the key remains retryable.
+Normal and forced-refresh misses are single-flighted per `CacheService` and cache key.
+Concurrent sync threads and async tasks share one computation. A `REFRESH` arriving
+behind a normal flight waits for it and then recomputes once; other refresh callers join
+that recomputation. A normal caller arriving behind a refresh joins the fresher work.
+`BYPASS` deliberately does not join a flight. This coordination is in-process; separate
+services or processes can still compute the same key concurrently. A computation that
+recursively requests its own key raises `RuntimeError` instead of deadlocking; the key
+remains retryable.
 
 ## CacheMode
 

@@ -17,6 +17,8 @@
 - Cache-store read and write failures now fail open for compute-or-cache calls: successful computations are returned while the backend error is logged.
 - Typed key normalization distinguishes equal-looking values of different types, including paths/UUIDs/temporal values versus strings and tuples/sets/frozensets versus lists.
 - The undocumented `cache_key()` normalization convention was removed; unsupported values must use explicit `inputs=` / `config=` shaping.
+- A forced refresh arriving during a normal same-key computation now waits and then recomputes; previously it joined the normal flight and silently skipped its refresh callback.
+- `CacheService.close()` now refuses to close the store while computations or background refreshes are active.
 
 ### Changed
 
