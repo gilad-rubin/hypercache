@@ -141,7 +141,7 @@ def test_structured_values_preserve_non_string_dict_keys():
 
 def test_structured_values_raise_on_fixed_tuple_length_mismatch():
     encoded = serialize_structured_value(FixedTupleAnswer(coords=(1, 2)))
-    encoded["data"]["data"]["coords"]["data"].append(3)
+    encoded["data"]["coords"]["data"].append(3)
 
     try:
         deserialize_structured_value(encoded)

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import base64
+import math
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
+from datetime import date, datetime, time
+from decimal import Decimal
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
+from uuid import UUID
 
 MARKER = "__hypercache__"
 STRUCTURED_V1 = "structured:v1"
@@ -16,28 +20,22 @@ PATH_V1 = "path:v1"
 ENUM_V1 = "enum:v1"
 TUPLE_V1 = "tuple:v1"
 SET_V1 = "set:v1"
+FROZENSET_V1 = "frozenset:v1"
+DATETIME_V1 = "datetime:v1"
+DECIMAL_V1 = "decimal:v1"
+UUID_V1 = "uuid:v1"
+
+_TEMPORAL_KINDS = {"datetime": datetime, "date": date, "time": time}
 
 
-def serialize_structured_value(value: Any) -> dict[str, Any]:
-    kind = _structured_kind(type(value))
-    if kind is None:
-        raise TypeError(
-            "serialize_structured_value only supports dataclass and Pydantic-style values"
-        )
-    return {
-        MARKER: STRUCTURED_V1,
-        "kind": kind,
-        "type": _type_path(type(value)),
-        "data": _to_plain_data(value),
-    }
+def serialize_structured_value(value: Any) -> Any:
+    """Encode structured values and their containers as JSON-safe data."""
+    return _to_plain_data(value)
 
 
 def deserialize_structured_value(value: Any) -> Any:
-    if not isinstance(value, Mapping) or value.get(MARKER) != STRUCTURED_V1:
-        return value
-
-    value_type = _load_type(value["type"])
-    return _from_plain_data(value["data"], expected_type=value_type)
+    """Rebuild values encoded by :func:`serialize_structured_value`."""
+    return _from_plain_data(value)
 
 
 def _to_plain_data(value: Any) -> Any:
@@ -56,6 +54,16 @@ def _to_plain_data(value: Any) -> Any:
         }
     if isinstance(value, Path):
         return {MARKER: PATH_V1, "data": str(value)}
+    if isinstance(value, datetime):
+        return {MARKER: DATETIME_V1, "kind": "datetime", "data": value.isoformat()}
+    if isinstance(value, date):
+        return {MARKER: DATETIME_V1, "kind": "date", "data": value.isoformat()}
+    if isinstance(value, time):
+        return {MARKER: DATETIME_V1, "kind": "time", "data": value.isoformat()}
+    if isinstance(value, Decimal):
+        return {MARKER: DECIMAL_V1, "data": str(value)}
+    if isinstance(value, UUID):
+        return {MARKER: UUID_V1, "data": str(value)}
     if isinstance(value, Enum):
         return {
             MARKER: ENUM_V1,
@@ -64,11 +72,12 @@ def _to_plain_data(value: Any) -> Any:
         }
     if isinstance(value, tuple):
         return {MARKER: TUPLE_V1, "data": [_to_plain_data(item) for item in value]}
-    if isinstance(value, set):
-        return {MARKER: SET_V1, "data": [_to_plain_data(item) for item in value]}
+    if isinstance(value, (set, frozenset)):
+        marker = FROZENSET_V1 if isinstance(value, frozenset) else SET_V1
+        return {MARKER: marker, "data": [_to_plain_data(item) for item in value]}
     if isinstance(value, list):
         return [_to_plain_data(item) for item in value]
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {
             MARKER: DICT_V1,
             "data": [
@@ -76,7 +85,11 @@ def _to_plain_data(value: Any) -> Any:
                 for key, item in value.items()
             ],
         }
-    return value
+    if isinstance(value, float) and not math.isfinite(value):
+        raise TypeError(f"Unsupported structured value {value!r}: float must be finite")
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    raise TypeError(f"Unsupported structured value {type(value)!r}")
 
 
 def _plain_fields(value: Any) -> dict[str, Any]:
@@ -104,6 +117,12 @@ def _from_plain_data(value: Any, *, expected_type: Any | None = None) -> Any:
             return base64.b64decode(value["data"].encode("ascii"))
         if marker == PATH_V1:
             return Path(value["data"])
+        if marker == DATETIME_V1:
+            return _TEMPORAL_KINDS[value["kind"]].fromisoformat(value["data"])
+        if marker == DECIMAL_V1:
+            return Decimal(value["data"])
+        if marker == UUID_V1:
+            return UUID(value["data"])
         if marker == ENUM_V1:
             enum_type = _load_type(value["type"])
             return enum_type(_from_plain_data(value["data"]))
@@ -115,6 +134,10 @@ def _from_plain_data(value: Any, *, expected_type: Any | None = None) -> Any:
             if get_origin(expected_type) is set:
                 return _from_generic(value["data"], expected_type)
             return {_from_plain_data(item) for item in value["data"]}
+        if marker == FROZENSET_V1:
+            if get_origin(expected_type) is frozenset:
+                return _from_generic(value["data"], expected_type)
+            return frozenset(_from_plain_data(item) for item in value["data"])
 
     if expected_type is None:
         if isinstance(value, list):
@@ -158,25 +181,25 @@ def _from_generic(value: Any, expected_type: Any) -> Any:
         if len(args) == 2 and args[1] is Ellipsis:
             return tuple(_from_plain_data(item, expected_type=args[0]) for item in value)
         if len(value) != len(args):
-            raise ValueError(
-                f"Expected tuple with {len(args)} items, got {len(value)} items"
-            )
+            raise ValueError(f"Expected tuple with {len(args)} items, got {len(value)} items")
         return tuple(
-            _from_plain_data(item, expected_type=item_type)
-            for item, item_type in zip(value, args)
+            _from_plain_data(item, expected_type=item_type) for item, item_type in zip(value, args)
         )
 
     if origin is set:
         item_type = args[0] if args else Any
         return {_from_plain_data(item, expected_type=item_type) for item in value}
 
+    if origin is frozenset:
+        item_type = args[0] if args else Any
+        return frozenset(_from_plain_data(item, expected_type=item_type) for item in value)
+
     if origin is dict:
         key_type, value_type = args if len(args) == 2 else (Any, Any)
         if isinstance(value, Mapping) and value.get(MARKER) == DICT_V1:
             return _decode_mapping(value["data"], key_type=key_type, value_type=value_type)
         return {
-            key: _from_plain_data(item, expected_type=value_type)
-            for key, item in value.items()
+            key: _from_plain_data(item, expected_type=value_type) for key, item in value.items()
         }
 
     if value is None:
@@ -199,13 +222,23 @@ def _from_generic(value: Any, expected_type: Any) -> Any:
 
 def _build_dataclass(dataclass_type: type[Any], value: Mapping[str, Any]) -> Any:
     type_hints = get_type_hints(dataclass_type)
-    kwargs = {}
+    init_kwargs: dict[str, Any] = {}
+    non_init: dict[str, Any] = {}
     for field in fields(dataclass_type):
-        if not field.init or field.name not in value:
+        if field.name not in value:
             continue
         field_type = type_hints.get(field.name, Any)
-        kwargs[field.name] = _from_plain_data(value[field.name], expected_type=field_type)
-    return dataclass_type(**kwargs)
+        decoded = _from_plain_data(value[field.name], expected_type=field_type)
+        if field.init:
+            init_kwargs[field.name] = decoded
+        else:
+            non_init[field.name] = decoded
+    instance = dataclass_type(**init_kwargs)
+    for name, decoded in non_init.items():
+        # object.__setattr__ so frozen dataclasses restore too; skipping these
+        # fields silently reset post-init state on round-trip.
+        object.__setattr__(instance, name, decoded)
+    return instance
 
 
 def _decode_mapping(
@@ -235,12 +268,8 @@ def _is_pydantic_instance(value: Any) -> bool:
 
 
 def _is_pydantic_type(value_type: type[Any]) -> bool:
-    return (
-        hasattr(value_type, "model_validate")
-        and callable(value_type.model_validate)
-    ) or (
-        hasattr(value_type, "parse_obj")
-        and callable(value_type.parse_obj)
+    return (hasattr(value_type, "model_validate") and callable(value_type.model_validate)) or (
+        hasattr(value_type, "parse_obj") and callable(value_type.parse_obj)
     )
 
 

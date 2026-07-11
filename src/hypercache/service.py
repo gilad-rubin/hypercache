@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
+from concurrent.futures import Future
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, TypeVar
@@ -11,10 +15,26 @@ from typing import Any, TypeVar
 from .keys import build_key, instance_name, make_key
 from .observer import CacheTelemetry, _emit
 from .stores import CacheStore, DiskCacheStore, MemoryStore
-from .types import CacheEntry, CacheMode, CachePolicy, CacheResult, utc_now
+from .types import CacheEntry, CacheKey, CacheMode, CachePolicy, CacheResult, utc_now
 
 log = logging.getLogger(__name__)
 T = TypeVar("T")
+_active_flight_keys: ContextVar[frozenset[str]] = ContextVar(
+    "hypercache_active_flight_keys", default=frozenset()
+)
+
+
+@dataclass(frozen=True)
+class _Flight:
+    future: Future[CacheResult]
+    is_leader: bool
+    refresh_after: bool = False
+
+
+@dataclass(frozen=True)
+class _ActiveFlight:
+    future: Future[CacheResult]
+    mode: CacheMode
 
 
 class CacheService:
@@ -22,6 +42,12 @@ class CacheService:
         self._store = store
         self._refreshing: set[str] = set()
         self._refresh_lock = threading.Lock()
+        # The event loop holds only weak refs to tasks; without this set a
+        # background refresh task can be garbage-collected mid-flight.
+        self._refresh_tasks: set[asyncio.Task[None]] = set()
+        self._flights: dict[str, _ActiveFlight] = {}
+        self._flight_lock = threading.Lock()
+        self._closed = False
 
     @classmethod
     def memory(cls, *, max_entries: int = 1024) -> CacheService:
@@ -36,7 +62,14 @@ class CacheService:
         return make_key(payload)
 
     def get(self, key: str) -> Any | None:
-        entry = self.get_entry(key)
+        try:
+            entry = self.get_entry(key)
+        except Exception:
+            log.exception(
+                "Failed to read cache entry for key %s; treating it as missing.",
+                key,
+            )
+            return None
         if entry is None:
             return None
         return entry.value
@@ -113,7 +146,15 @@ class CacheService:
         return len(keys_to_delete)
 
     def close(self) -> None:
-        self._store.close()
+        with self._flight_lock, self._refresh_lock:
+            if self._closed:
+                return
+            if self._flights or self._refreshing:
+                raise RuntimeError(
+                    "Cannot close CacheService while cache computations or refreshes are active."
+                )
+            self._closed = True
+            self._store.close()
 
     def run(
         self,
@@ -129,6 +170,7 @@ class CacheService:
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
+        self._ensure_open()
         request = build_key(
             instance=instance,
             operation=operation,
@@ -136,80 +178,63 @@ class CacheService:
             inputs=inputs,
             config=config,
         )
-        inst = request.payload.get("instance", type(instance).__qualname__)
-        mode_str = self._mode_str(mode)
-        cached = self._read_cached_value(
-            key=request.key,
-            payload=request.payload,
+
+        def start_refresh() -> bool:
+            return self._refresh_in_thread(
+                key=request.key,
+                payload=request.payload,
+                policy=policy,
+                compute=compute,
+                serialize=serialize,
+            )
+
+        prepared = self._prepare_call(
+            request=request,
             policy=policy,
             mode=mode,
             deserialize=deserialize,
+            operation=operation,
+            start_refresh=start_refresh,
         )
-        if cached is not None:
-            if cached.is_stale and policy.refresh_in_background:
-                refreshing = self._refresh_in_thread(
-                    key=request.key,
-                    payload=request.payload,
-                    policy=policy,
-                    compute=compute,
-                    serialize=serialize,
-                )
-                _emit(
-                    CacheTelemetry(
-                        hit=True,
-                        stale=True,
-                        refreshing=refreshing,
-                        wrote=False,
-                        mode=mode_str,
-                        instance=inst,
-                        operation=operation,
-                    )
-                )
-                return CacheResult(
-                    value=cached.value,
-                    source="cache",
-                    key=request.key,
-                    payload=request.payload,
-                    is_stale=True,
-                    is_refreshing=refreshing,
-                )
-            _emit(
-                CacheTelemetry(
-                    hit=True,
-                    stale=cached.is_stale,
-                    refreshing=False,
-                    wrote=False,
-                    mode=mode_str,
-                    instance=inst,
-                    operation=operation,
-                )
-            )
-            return cached
-
-        value = compute()
-        wrote = self._write_value(
-            key=request.key,
-            payload=request.payload,
-            value=value,
-            policy=policy,
-            serialize=serialize,
-        )
-        _emit(
-            CacheTelemetry(
-                hit=False,
-                stale=False,
-                refreshing=False,
-                wrote=wrote,
-                mode=mode_str,
-                instance=inst,
+        if isinstance(prepared, CacheResult):
+            return prepared
+        if prepared is None:
+            return self._complete_miss(
+                request,
+                compute(),
+                policy=policy,
+                serialize=serialize,
+                mode=mode,
                 operation=operation,
             )
-        )
-        return CacheResult(
-            value=value,
-            source="compute",
-            key=request.key,
-            payload=request.payload,
+        while not prepared.is_leader:
+            if not prepared.refresh_after:
+                return self._complete_shared(
+                    prepared.future.result(), mode=mode, operation=operation
+                )
+            try:
+                prepared.future.result()
+            except Exception:
+                pass
+            prepared = self._prepare_call(
+                request=request,
+                policy=policy,
+                mode=mode,
+                deserialize=deserialize,
+                operation=operation,
+                start_refresh=start_refresh,
+            )
+            assert isinstance(prepared, _Flight)
+        return self._run_leader(
+            request,
+            prepared.future,
+            policy=policy,
+            mode=mode,
+            compute=compute,
+            serialize=serialize,
+            deserialize=deserialize,
+            operation=operation,
+            start_refresh=start_refresh,
         )
 
     async def arun(
@@ -226,6 +251,7 @@ class CacheService:
         serialize: Callable[[T], Any] | None = None,
         deserialize: Callable[[Any], T] | None = None,
     ) -> CacheResult:
+        self._ensure_open()
         request = build_key(
             instance=instance,
             operation=operation,
@@ -233,8 +259,166 @@ class CacheService:
             inputs=inputs,
             config=config,
         )
-        inst = request.payload.get("instance", type(instance).__qualname__)
-        mode_str = self._mode_str(mode)
+
+        def start_refresh() -> bool:
+            return self._refresh_in_background(
+                key=request.key,
+                payload=request.payload,
+                policy=policy,
+                compute=compute,
+                serialize=serialize,
+            )
+
+        prepared = self._prepare_call(
+            request=request,
+            policy=policy,
+            mode=mode,
+            deserialize=deserialize,
+            operation=operation,
+            start_refresh=start_refresh,
+        )
+        if isinstance(prepared, CacheResult):
+            return prepared
+        if prepared is None:
+            return self._complete_miss(
+                request,
+                await compute(),
+                policy=policy,
+                serialize=serialize,
+                mode=mode,
+                operation=operation,
+            )
+        while not prepared.is_leader:
+            if not prepared.refresh_after:
+                result = await self._await_flight(prepared.future)
+                return self._complete_shared(result, mode=mode, operation=operation)
+            try:
+                await self._await_flight(prepared.future)
+            except Exception:
+                pass
+            prepared = self._prepare_call(
+                request=request,
+                policy=policy,
+                mode=mode,
+                deserialize=deserialize,
+                operation=operation,
+                start_refresh=start_refresh,
+            )
+            assert isinstance(prepared, _Flight)
+        return await self._arun_leader(
+            request,
+            prepared.future,
+            policy=policy,
+            mode=mode,
+            compute=compute,
+            serialize=serialize,
+            deserialize=deserialize,
+            operation=operation,
+            start_refresh=start_refresh,
+        )
+
+    def _prepare_call(
+        self,
+        *,
+        request: CacheKey,
+        policy: CachePolicy,
+        mode: CacheMode,
+        deserialize: Callable[[Any], T] | None,
+        operation: str,
+        start_refresh: Callable[[], bool],
+    ) -> CacheResult | _Flight | None:
+        cached = self._read_hit(
+            request=request,
+            policy=policy,
+            mode=mode,
+            deserialize=deserialize,
+            operation=operation,
+            start_refresh=start_refresh,
+        )
+        if cached is not None:
+            return cached
+        if mode is CacheMode.BYPASS:
+            return None
+        return self._begin_flight(request.key, mode)
+
+    def _run_leader(
+        self,
+        request: CacheKey,
+        flight: Future[CacheResult],
+        *,
+        policy: CachePolicy,
+        mode: CacheMode,
+        compute: Callable[[], T],
+        serialize: Callable[[T], Any] | None,
+        deserialize: Callable[[Any], T] | None,
+        operation: str,
+        start_refresh: Callable[[], bool],
+    ) -> CacheResult:
+        with self._lead_flight(request.key, flight):
+            result = self._read_hit(
+                request=request,
+                policy=policy,
+                mode=mode,
+                deserialize=deserialize,
+                operation=operation,
+                start_refresh=start_refresh,
+            )
+            if result is None:
+                result = self._complete_miss(
+                    request,
+                    compute(),
+                    policy=policy,
+                    serialize=serialize,
+                    mode=mode,
+                    operation=operation,
+                )
+            self._finish_flight(request.key, flight, result)
+            return result
+
+    async def _arun_leader(
+        self,
+        request: CacheKey,
+        flight: Future[CacheResult],
+        *,
+        policy: CachePolicy,
+        mode: CacheMode,
+        compute: Callable[[], Awaitable[T]],
+        serialize: Callable[[T], Any] | None,
+        deserialize: Callable[[Any], T] | None,
+        operation: str,
+        start_refresh: Callable[[], bool],
+    ) -> CacheResult:
+        with self._lead_flight(request.key, flight):
+            result = self._read_hit(
+                request=request,
+                policy=policy,
+                mode=mode,
+                deserialize=deserialize,
+                operation=operation,
+                start_refresh=start_refresh,
+            )
+            if result is None:
+                result = self._complete_miss(
+                    request,
+                    await compute(),
+                    policy=policy,
+                    serialize=serialize,
+                    mode=mode,
+                    operation=operation,
+                )
+            self._finish_flight(request.key, flight, result)
+            return result
+
+    def _read_hit(
+        self,
+        *,
+        request: CacheKey,
+        policy: CachePolicy,
+        mode: CacheMode,
+        deserialize: Callable[[Any], T] | None,
+        operation: str,
+        start_refresh: Callable[[], bool],
+    ) -> CacheResult | None:
         cached = self._read_cached_value(
             key=request.key,
             payload=request.payload,
@@ -242,49 +426,149 @@ class CacheService:
             mode=mode,
             deserialize=deserialize,
         )
-        if cached is not None:
-            if cached.is_stale and policy.refresh_in_background:
-                refreshing = self._refresh_in_background(
-                    key=request.key,
-                    payload=request.payload,
-                    policy=policy,
-                    compute=compute,
-                    serialize=serialize,
-                )
-                _emit(
-                    CacheTelemetry(
-                        hit=True,
-                        stale=True,
-                        refreshing=refreshing,
-                        wrote=False,
-                        mode=mode_str,
-                        instance=inst,
-                        operation=operation,
-                    )
-                )
-                return CacheResult(
-                    value=cached.value,
-                    source="cache",
-                    key=request.key,
-                    payload=request.payload,
-                    is_stale=True,
-                    is_refreshing=refreshing,
-                )
-            _emit(
-                CacheTelemetry(
-                    hit=True,
-                    stale=cached.is_stale,
-                    refreshing=False,
-                    wrote=False,
-                    mode=mode_str,
-                    instance=inst,
-                    operation=operation,
-                )
-            )
-            return cached
+        if cached is None:
+            return None
+        return self._complete_hit(
+            cached,
+            mode=mode,
+            operation=operation,
+            start_refresh=start_refresh,
+        )
 
-        value = await compute()
-        wrote = self._write_value(
+    @contextmanager
+    def _lead_flight(
+        self,
+        key: str,
+        flight: Future[CacheResult],
+    ) -> Iterator[None]:
+        active_token = _active_flight_keys.set(_active_flight_keys.get() | {key})
+        try:
+            yield
+        except BaseException as error:
+            self._fail_flight(key, flight, error)
+            raise
+        finally:
+            _active_flight_keys.reset(active_token)
+
+    def _ensure_open(self) -> None:
+        with self._flight_lock:
+            if self._closed:
+                raise RuntimeError("CacheService is closed.")
+
+    def _begin_flight(self, key: str, mode: CacheMode) -> _Flight:
+        with self._flight_lock:
+            if self._closed:
+                raise RuntimeError("CacheService is closed.")
+            active = self._flights.get(key)
+            if active is not None:
+                if key in _active_flight_keys.get():
+                    raise RuntimeError(
+                        "A cache computation requested the same cache key recursively; "
+                        "joining its own single-flight would deadlock."
+                    )
+                return _Flight(
+                    future=active.future,
+                    is_leader=False,
+                    refresh_after=mode is CacheMode.REFRESH and active.mode is CacheMode.NORMAL,
+                )
+            flight = Future()
+            self._flights[key] = _ActiveFlight(future=flight, mode=mode)
+            return _Flight(future=flight, is_leader=True)
+
+    async def _await_flight(self, flight: Future[CacheResult]) -> CacheResult:
+        wrapped = asyncio.wrap_future(flight)
+        try:
+            return await asyncio.shield(wrapped)
+        except asyncio.CancelledError:
+            # Shielding keeps one cancelled waiter from cancelling the shared
+            # concurrent future. Consume a later leader exception so the
+            # abandoned asyncio wrapper does not emit an unhandled warning.
+            wrapped.add_done_callback(_consume_future_exception)
+            raise
+
+    def _finish_flight(
+        self,
+        key: str,
+        flight: Future[CacheResult],
+        result: CacheResult,
+    ) -> None:
+        with self._flight_lock:
+            flight.set_result(result)
+            active = self._flights.get(key)
+            if active is not None and active.future is flight:
+                self._flights.pop(key)
+
+    def _fail_flight(
+        self,
+        key: str,
+        flight: Future[CacheResult],
+        error: BaseException,
+    ) -> None:
+        with self._flight_lock:
+            flight.set_exception(error)
+            active = self._flights.get(key)
+            if active is not None and active.future is flight:
+                self._flights.pop(key)
+
+    def _complete_shared(
+        self,
+        result: CacheResult,
+        *,
+        mode: CacheMode,
+        operation: str,
+    ) -> CacheResult:
+        served_from_cache = result.source == "cache"
+        _emit(
+            CacheTelemetry(
+                hit=served_from_cache,
+                stale=result.is_stale,
+                refreshing=False,
+                wrote=False,
+                mode=self._mode_str(mode),
+                instance=str(result.payload.get("instance", "")),
+                operation=operation,
+                shared=not served_from_cache,
+            )
+        )
+        if served_from_cache:
+            return result
+        return replace(result, source="shared")
+
+    def _complete_hit(
+        self,
+        cached: CacheResult,
+        *,
+        mode: CacheMode,
+        operation: str,
+        start_refresh: Callable[[], bool],
+    ) -> CacheResult:
+        refreshing = cached.is_stale and start_refresh()
+        _emit(
+            CacheTelemetry(
+                hit=True,
+                stale=cached.is_stale,
+                refreshing=refreshing,
+                wrote=False,
+                mode=self._mode_str(mode),
+                instance=str(cached.payload.get("instance", "")),
+                operation=operation,
+            )
+        )
+        if refreshing:
+            return replace(cached, is_refreshing=True)
+        return cached
+
+    def _complete_miss(
+        self,
+        request: CacheKey,
+        value: Any,
+        *,
+        policy: CachePolicy,
+        serialize: Callable[[Any], Any] | None,
+        mode: CacheMode,
+        operation: str,
+    ) -> CacheResult:
+        wrote = mode is not CacheMode.BYPASS and self._write_value(
             key=request.key,
             payload=request.payload,
             value=value,
@@ -297,8 +581,8 @@ class CacheService:
                 stale=False,
                 refreshing=False,
                 wrote=wrote,
-                mode=mode_str,
-                instance=inst,
+                mode=self._mode_str(mode),
+                instance=str(request.payload.get("instance", "")),
                 operation=operation,
             )
         )
@@ -321,7 +605,14 @@ class CacheService:
         if mode in {CacheMode.BYPASS, CacheMode.REFRESH}:
             return None
 
-        entry = self.get_entry(key)
+        try:
+            entry = self.get_entry(key)
+        except Exception:
+            log.exception(
+                "Failed to read cache entry for key %s; recomputing without cache.",
+                key,
+            )
+            return None
         if entry is None:
             return None
 
@@ -336,7 +627,10 @@ class CacheService:
                 payload.get("operation"),
                 exc_info=True,
             )
-            self.delete(key)
+            try:
+                self.delete(key)
+            except Exception:
+                log.exception("Failed to evict unreadable cache entry for key %s", key)
             return None
         if not entry.is_stale(policy.stale):
             return CacheResult(
@@ -367,7 +661,15 @@ class CacheService:
         if value is None and not policy.cache_none:
             return False
 
-        stored_value = serialize(value) if serialize else value
+        try:
+            stored_value = serialize(value) if serialize else value
+        except Exception:
+            log.exception(
+                "Failed to serialize cache value for key %s; the computed value is "
+                "returned to the caller but NOT cached.",
+                key,
+            )
+            return False
         now = utc_now()
         expires_at = None if policy.ttl is None else now + policy.ttl
         entry = CacheEntry(
@@ -376,7 +678,15 @@ class CacheService:
             expires_at=expires_at,
             payload=dict(payload),
         )
-        self._store.set(key, entry, policy.ttl)
+        try:
+            self._store.set(key, entry, policy.ttl)
+        except Exception:
+            log.exception(
+                "Failed to write cache entry for key %s; the computed value is "
+                "returned to the caller but NOT cached.",
+                key,
+            )
+            return False
         return True
 
     @staticmethod
@@ -426,7 +736,12 @@ class CacheService:
                 self._end_refresh(key)
 
         thread = threading.Thread(target=runner, daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            self._end_refresh(key)
+            log.exception("Failed to start background cache refresh for key %s", key)
+            return False
         return True
 
     def _refresh_in_background(
@@ -456,7 +771,16 @@ class CacheService:
             finally:
                 self._end_refresh(key)
 
-        asyncio.get_running_loop().create_task(runner())
+        refresh = runner()
+        try:
+            task = asyncio.get_running_loop().create_task(refresh)
+        except Exception:
+            refresh.close()
+            self._end_refresh(key)
+            log.exception("Failed to start background cache refresh for key %s", key)
+            return False
+        self._refresh_tasks.add(task)
+        task.add_done_callback(self._refresh_tasks.discard)
         return True
 
 
@@ -468,3 +792,8 @@ def _coerce_ttl(*, ttl: timedelta | None, ttl_seconds: int | None) -> timedelta 
     if ttl_seconds is not None:
         return timedelta(seconds=ttl_seconds)
     return None
+
+
+def _consume_future_exception(future: asyncio.Future[CacheResult]) -> None:
+    if not future.cancelled():
+        future.exception()
