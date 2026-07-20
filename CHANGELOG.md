@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `@cached` now infers the built-in structured codec from a direct Pydantic `BaseModel`
+  return annotation. Explicit codecs still take precedence, and an unannotated model
+  raises with repair guidance instead of falling through to backend object storage.
+
 ## [0.3.0] - 2026-07-11
 
 ### Fixed

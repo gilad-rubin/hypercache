@@ -19,7 +19,7 @@ All arguments are keyword-only (note the leading `*`):
     exclude: frozenset[str] | None = None,  # arg names to exclude from key
     serialize: Callable | None = None,  # custom serialization for cached value
     deserialize: Callable | None = None,  # custom deserialization
-    structured: bool = False,          # built-in JSON-safe dataclass/Pydantic codec
+    structured: bool = False,          # opt in for dataclasses/model containers
 )
 ```
 
@@ -30,6 +30,7 @@ Validation happens at decoration (import) time, not first call:
 - The owning class must declare the cache attribute (`cache: CacheService | None`), or decoration raises `TypeError`.
 - Every name in `exclude=` must exist in the method's signature (checked only when `inputs=` is not supplied).
 - `@cached` supports instance methods only. Plain functions and `@staticmethod`/`@classmethod` descriptors visible to `@cached` are rejected at decoration time. If an outer decorator hides that shape until binding (for example, `@staticmethod` placed above `@cached`), the first call raises a clear `TypeError`.
+- A return annotation that resolves to a Pydantic `BaseModel` subclass selects the built-in structured codec when no custom codecs are given.
 - `structured=True` is mutually exclusive with `serialize=` and `deserialize=`.
 
 If the cache attribute resolves to `None`, the method runs uncached. Hypercache never
@@ -45,7 +46,7 @@ The decorated method becomes a `CachedMethod` descriptor with helper methods:
 
 (`invalidate_cache` and `clear_cache` are legacy aliases for the last two.)
 
-If the value the method returns fails to serialize, the computed value is still returned to the caller; the entry is not written and the error is logged (`hypercache.service` logger).
+If the value the method returns fails to serialize, the computed value is still returned to the caller; the entry is not written and the error is logged (`hypercache.service` logger). One safety error remains loud: a Pydantic `BaseModel` value without an inferred or explicit serializer raises `TypeError` instead of falling through to backend object storage. Annotate the return type or pass `serialize=` / `deserialize=`.
 
 ## CacheService
 
@@ -162,16 +163,19 @@ differently and user mappings cannot imitate internal type tags. Anything else r
 
 ## Structured return values
 
-For methods returning dataclasses, Pydantic models, or containers holding them, enable
-the built-in codec explicitly:
+For a method returning a Pydantic `BaseModel` subclass, the return annotation selects the
+built-in codec:
 
 ```python
-@cached(
-    version="parse:v1",
-    structured=True,
-)
-def parse(self, document_id: str) -> list[Invoice]: ...
+@cached(version="parse:v1")
+def parse(self, document_id: str) -> Invoice: ...
 ```
+
+Use `structured=True` for dataclasses and containers holding models, such as
+`list[Invoice]`. Explicit `serialize=` / `deserialize=` callables always win over
+annotation inference. Missing and `Any` return annotations do not trigger inference; if
+the method then returns a `BaseModel`, the write raises with guidance instead of storing
+the live object.
 
 The public `serialize_structured_value` / `deserialize_structured_value` functions remain
 available for direct `CacheService.run` use and custom integrations. The codec stores a

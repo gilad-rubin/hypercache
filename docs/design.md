@@ -65,13 +65,15 @@ The decorator inspects the function signature and captures all arguments automat
 
 For the cases where you need to exclude an argument (like `request_id` or `trace_id`), use `exclude=`. For full control, use `inputs=`.
 
-## Why structured caching is explicit
+## Why Pydantic codec inference stops at direct model returns
 
 Dataclass and Pydantic values need a self-describing representation to survive a process
-restart without relying on a live Python object. Hypercache does not silently serialize
-every return value: `structured=True` is visible at the decorator, while plain methods
-retain their existing store representation. Custom `serialize=` / `deserialize=` callables
-remain the escape hatch and cannot be combined with structured mode.
+restart without relying on a live Python object. A declared Pydantic `BaseModel` return
+type is a stable, visible signal, so Hypercache selects the structured codec for that
+exact case. Dataclasses, containers, missing annotations, and `Any` remain unchanged;
+they use `structured=True` when structured persistence is wanted. A runtime `BaseModel`
+without codecs raises instead of falling through to backend object storage. Custom
+`serialize=` / `deserialize=` callables remain the escape hatch and take precedence.
 
 ## Why single-flight lives in CacheService
 

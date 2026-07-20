@@ -3,12 +3,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import wraps
 from inspect import iscoroutinefunction, signature
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, get_type_hints
 
 from .core import _current_cache_mode
 from .keys import build_key
 from .service import CacheService
-from .structured import deserialize_structured_value, serialize_structured_value
+from .structured import (
+    _is_pydantic_base_model_type,
+    deserialize_structured_value,
+    serialize_structured_value,
+)
 from .types import CachePolicy
 
 CacheResolver = Union[str, Callable[[Any], Optional[CacheService]]]
@@ -257,10 +261,13 @@ def cached(
             output-affecting instance state to include in the key.
         inputs: Named function overriding input capture.
         exclude: Argument names to drop from the key (trace ids, timestamps).
-        serialize: Custom serialization for the cached value.
-        deserialize: Custom deserialization for the cached value.
+        serialize: Custom serialization for the cached value. Explicit codecs disable
+            return-annotation inference.
+        deserialize: Custom deserialization for the cached value. Explicit codecs disable
+            return-annotation inference.
         structured: Use hypercache's JSON-safe dataclass/Pydantic codec, including
-            for nested root containers. Mutually exclusive with custom codecs.
+            for nested root containers. A direct Pydantic BaseModel return annotation
+            selects this codec automatically. Mutually exclusive with custom codecs.
     """
     if structured and (serialize is not None or deserialize is not None):
         raise TypeError(
@@ -289,6 +296,15 @@ def cached(
                 "@cached supports instance methods only; it cannot wrap "
                 f"@{type(func).__name__} (the cache lives on the instance)."
             )
+        method_serialize = serialize
+        method_deserialize = deserialize
+        if (
+            method_serialize is None
+            and method_deserialize is None
+            and _returns_pydantic_model(func)
+        ):
+            method_serialize = serialize_structured_value
+            method_deserialize = deserialize_structured_value
         return CachedMethod(
             func,
             version=version,
@@ -298,11 +314,31 @@ def cached(
             config=config,
             inputs=inputs,
             exclude=exclude,
-            serialize=serialize,
-            deserialize=deserialize,
+            serialize=method_serialize,
+            deserialize=method_deserialize,
         )
 
     return decorator
+
+
+def _returns_pydantic_model(func: Callable[..., Any]) -> bool:
+    return_annotation = signature(func).return_annotation
+    if not isinstance(return_annotation, str):
+        return _is_pydantic_base_model_type(return_annotation)
+
+    def annotated_return() -> None:
+        return None
+
+    annotated_return.__annotations__ = {"return": return_annotation}
+    try:
+        return_annotation = get_type_hints(
+            annotated_return,
+            globalns=getattr(func, "__globals__", {}),
+        ).get("return")
+    except Exception:
+        # An unresolved forward reference must not change existing decoration behavior.
+        return False
+    return _is_pydantic_base_model_type(return_annotation)
 
 
 def _owner_declares_attribute(owner: type, attr: str) -> bool:

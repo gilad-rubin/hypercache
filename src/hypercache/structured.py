@@ -7,6 +7,7 @@ from dataclasses import fields, is_dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum
+from functools import lru_cache
 from importlib import import_module
 from pathlib import Path
 from typing import Any, get_args, get_origin, get_type_hints
@@ -271,6 +272,25 @@ def _is_pydantic_type(value_type: type[Any]) -> bool:
     return (hasattr(value_type, "model_validate") and callable(value_type.model_validate)) or (
         hasattr(value_type, "parse_obj") and callable(value_type.parse_obj)
     )
+
+
+def _is_pydantic_base_model_instance(value: Any) -> bool:
+    base_model = _pydantic_base_model()
+    return base_model is not None and isinstance(value, base_model)
+
+
+def _is_pydantic_base_model_type(value: Any) -> bool:
+    base_model = _pydantic_base_model()
+    return base_model is not None and isinstance(value, type) and issubclass(value, base_model)
+
+
+@lru_cache(maxsize=1)
+def _pydantic_base_model() -> type[Any] | None:
+    try:
+        from pydantic import BaseModel
+    except ModuleNotFoundError:
+        return None
+    return BaseModel
 
 
 def _validate_pydantic(value_type: type[Any], value: Any) -> Any:
