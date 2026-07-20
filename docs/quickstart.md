@@ -67,14 +67,13 @@ Swap `MemoryStore` for `DiskCacheStore` — everything else stays the same.
 
 ## Structured results
 
-A direct Pydantic model return annotation selects the structured codec:
+Opt in once at the decorator for dataclasses, Pydantic models, and nested containers:
 
 ```python
-@cached(config=_embedder_config)
-def load_document(self, document_id: str) -> Document:
-    return fetch_document(document_id)
+@cached(config=_embedder_config, structured=True)
+def load_documents(self, collection: str) -> list[Document]:
+    return fetch_documents(collection)
 ```
 
-Use `structured=True` for dataclasses and containers such as `list[Document]`.
 The stored value is JSON-safe and self-describing. The model class must be importable
 from its recorded module, and cache data must be trusted when deserializing it.

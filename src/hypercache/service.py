@@ -15,7 +15,6 @@ from typing import Any, TypeVar
 from .keys import build_key, instance_name, make_key
 from .observer import CacheTelemetry, _emit
 from .stores import CacheStore, DiskCacheStore, MemoryStore
-from .structured import _is_pydantic_base_model_instance
 from .types import CacheEntry, CacheKey, CacheMode, CachePolicy, CacheResult, utc_now
 
 log = logging.getLogger(__name__)
@@ -661,11 +660,6 @@ class CacheService:
     ) -> bool:
         if value is None and not policy.cache_none:
             return False
-        if serialize is None and _is_pydantic_base_model_instance(value):
-            raise TypeError(
-                "Cannot cache a Pydantic BaseModel value without codecs; "
-                "annotate the return type or pass serialize/deserialize."
-            )
 
         try:
             stored_value = serialize(value) if serialize else value

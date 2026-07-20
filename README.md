@@ -196,11 +196,10 @@ cache = CacheService(DiskCacheStore(Path("./cache")))
 
 ## Structured return values
 
-For a method annotated to return a Pydantic `BaseModel` subclass, `@cached` selects the
-structured codec from the annotation (`pip install "hypercache[pydantic]"` — Pydantic is
-the optional extra this snippet needs). Use `structured=True` for dataclasses and nested
-root containers such as `list[Invoice]`. Explicit `serialize=` / `deserialize=` codecs
-always take precedence.
+For Pydantic-style models and dataclasses (`pip install "hypercache[pydantic]"` — Pydantic
+is the optional extra this snippet needs), use `structured=True` so disk persistence
+stores self-describing plain data instead of relying on live Python objects. The same
+mode handles nested root containers such as `list[Invoice]`.
 `deserialize_structured_value` rebuilds the same model type back, even from a fresh
 `CacheService` that never saw the original class instance construct it — the shape a
 restarted process actually sees:
@@ -228,7 +227,10 @@ class Parser:
     def __init__(self, cache: CacheService):
         self.cache = cache
 
-    @cached(version="parse:v1")
+    @cached(
+        version="parse:v1",
+        structured=True,
+    )
     def parse(self, document_id: str) -> Invoice:
         return Invoice(number=document_id, total=42.5)
 
